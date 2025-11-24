@@ -6,6 +6,7 @@ module top_ds1302(
 
     input       btnR,
     input [5:0] sw,
+    input       reA, reB, reBtn,
 
     output [15:0] led,
     output  [3:0] an,
@@ -45,10 +46,16 @@ module top_ds1302(
     // 입력 Handling
     btnEdgeDetecter u_btnDebouncer (.clk(clk), .rst(rst), .tick(tick1ms), .btnRaw(btnR), .btnPulse(btnPulse));
 
+    debounceRotary u_rotaryDebouncer (
+        .clk(clk), .rst(rst), .tick(tick1ms), .btnRaw({reBtn, reB, reA}), .btnDb({reBtnDb, reBdb, reAdb}));
+    
+    rotary u_rotary (
+        .clk(clk), .rst(rst), .s1(reAdb), .s2(reBdb), .key(reBtnDb), .cw(reCw), .ccw(reCcw), .keyEdge(reBtnEdge));
+
     // RTC 메인 컨트롤러
     rtcCtrl u_rtcCtrl (
         .clk(clk), .rst(rst),
-        .btn(btnPulse), .mode(sw),
+        .btn(btnPulse), .mode(sw), .cw(reCw), .ccw(reCcw), .save(reBtnEdge),
         // from ds1302read
         .minData(minData), .hrsData(hrsData),
         .dateData(dateData), .monData(monData), .dayData(dayData), .yrData(yrData),
