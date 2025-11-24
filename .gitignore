@@ -1,0 +1,39 @@
+# Windows
+Thumbs.db
+Desktop.ini
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Vivado
+*.cache/
+*.hw/
+*ip_user_files/
+*.runs/
+*webtalk/
+*.xpr
+*.jou
+*.log
+
+*.str
+*.xml
+*.pb
+*.xdc.bak
+*.dcp
+*.ltx
+
+.xsim.dir/
+*.wdb
+*.vcd
+
+# Build artifacts
+*.bin
+*.mcs
+*.elf
+*.bit
+
+# Other IDE / temp
+*.swp
+*.swo
+*.tmp
