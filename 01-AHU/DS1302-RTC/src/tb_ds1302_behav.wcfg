@@ -11,15 +11,24 @@
       </db_ref>
    </db_ref_list>
    <zoom_setting>
-      <ZoomStartTime time="0fs"></ZoomStartTime>
-      <ZoomEndTime time="475160001fs"></ZoomEndTime>
-      <Cursor1Time time="475160000fs"></Cursor1Time>
+      <ZoomStartTime time="963622139fs"></ZoomStartTime>
+      <ZoomEndTime time="1625389573fs"></ZoomEndTime>
+      <Cursor1Time time="1122110000fs"></Cursor1Time>
    </zoom_setting>
    <column_width_setting>
-      <NameColumnWidth column_width="136"></NameColumnWidth>
+      <NameColumnWidth column_width="128"></NameColumnWidth>
       <ValueColumnWidth column_width="58"></ValueColumnWidth>
    </column_width_setting>
-   <WVObjectSize size="24" />
+   <WVObjectSize size="26" />
+   <wave_markers>
+      <marker time="1115000" label="" />
+      <marker time="165155000" label="" />
+      <marker time="325155000" label="" />
+      <marker time="485155000" label="" />
+      <marker time="645155000" label="" />
+      <marker time="805155000" label="" />
+      <marker time="1130095000" label="" />
+   </wave_markers>
    <wvobject fp_name="/tb_ds1302/clk" type="logic">
       <obj_property name="ElementShortName">clk</obj_property>
       <obj_property name="ObjectShortName">clk</obj_property>
@@ -59,17 +68,17 @@
       <obj_property name="ElementShortName">dsData</obj_property>
       <obj_property name="ObjectShortName">dsData</obj_property>
    </wvobject>
-   <wvobject fp_name="/tb_ds1302/bitCnt" type="array">
-      <obj_property name="ElementShortName">bitCnt[3:0]</obj_property>
-      <obj_property name="ObjectShortName">bitCnt[3:0]</obj_property>
-   </wvobject>
-   <wvobject fp_name="/tb_ds1302/readCmd" type="logic">
-      <obj_property name="ElementShortName">readCmd</obj_property>
-      <obj_property name="ObjectShortName">readCmd</obj_property>
+   <wvobject fp_name="/tb_ds1302/dsIoDir" type="logic">
+      <obj_property name="ElementShortName">dsIoDir</obj_property>
+      <obj_property name="ObjectShortName">dsIoDir</obj_property>
+      <obj_property name="CustomSignalColor">#008080</obj_property>
+      <obj_property name="UseCustomSignalColor">true</obj_property>
    </wvobject>
    <wvobject fp_name="/tb_ds1302/state" type="array">
       <obj_property name="ElementShortName">state[1:0]</obj_property>
       <obj_property name="ObjectShortName">state[1:0]</obj_property>
+      <obj_property name="CustomSignalColor">#FF0080</obj_property>
+      <obj_property name="UseCustomSignalColor">true</obj_property>
    </wvobject>
    <wvobject type="divider" fp_name="divider25">
       <obj_property name="label">.</obj_property>
@@ -100,6 +109,41 @@
       <obj_property name="DisplayName">label</obj_property>
       <obj_property name="BkColor">#808080</obj_property>
    </wvobject>
+   <wvobject fp_name="/tb_ds1302/dut/u_rtcWrite/dataIn" type="logic">
+      <obj_property name="ElementShortName">dataIn</obj_property>
+      <obj_property name="ObjectShortName">dataIn</obj_property>
+      <obj_property name="CustomSignalColor">#FFA500</obj_property>
+      <obj_property name="UseCustomSignalColor">true</obj_property>
+   </wvobject>
+   <wvobject fp_name="/tb_ds1302/dut/u_rtcWrite/ioDir" type="logic">
+      <obj_property name="ElementShortName">ioDir</obj_property>
+      <obj_property name="ObjectShortName">ioDir</obj_property>
+      <obj_property name="CustomSignalColor">#008080</obj_property>
+      <obj_property name="UseCustomSignalColor">true</obj_property>
+   </wvobject>
+   <wvobject fp_name="/tb_ds1302/dut/u_rtcWrite/dataOut" type="logic">
+      <obj_property name="ElementShortName">dataOut</obj_property>
+      <obj_property name="ObjectShortName">dataOut</obj_property>
+   </wvobject>
+   <wvobject fp_name="/tb_ds1302/dut/u_rtcWrite/addr" type="array">
+      <obj_property name="ElementShortName">addr[7:0]</obj_property>
+      <obj_property name="ObjectShortName">addr[7:0]</obj_property>
+   </wvobject>
+   <wvobject fp_name="/tb_ds1302/dut/u_rtcWrite/dataByte" type="array">
+      <obj_property name="ElementShortName">dataByte[7:0]</obj_property>
+      <obj_property name="ObjectShortName">dataByte[7:0]</obj_property>
+   </wvobject>
+   <wvobject fp_name="/tb_ds1302/dut/u_rtcWrite/cState" type="array">
+      <obj_property name="ElementShortName">cState[1:0]</obj_property>
+      <obj_property name="ObjectShortName">cState[1:0]</obj_property>
+      <obj_property name="CustomSignalColor">#FF0080</obj_property>
+      <obj_property name="UseCustomSignalColor">true</obj_property>
+   </wvobject>
+   <wvobject type="divider" fp_name="divider51">
+      <obj_property name="label">.</obj_property>
+      <obj_property name="DisplayName">label</obj_property>
+      <obj_property name="BkColor">#808080</obj_property>
+   </wvobject>
    <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/dataIn" type="logic">
       <obj_property name="ElementShortName">dataIn</obj_property>
       <obj_property name="ObjectShortName">dataIn</obj_property>
@@ -112,37 +156,18 @@
       <obj_property name="CustomSignalColor">#008080</obj_property>
       <obj_property name="UseCustomSignalColor">true</obj_property>
    </wvobject>
-   <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/shiftReg" type="array">
-      <obj_property name="ElementShortName">shiftReg[7:0]</obj_property>
-      <obj_property name="ObjectShortName">shiftReg[7:0]</obj_property>
-   </wvobject>
    <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/dataOut" type="logic">
       <obj_property name="ElementShortName">dataOut</obj_property>
       <obj_property name="ObjectShortName">dataOut</obj_property>
-   </wvobject>
-   <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/secData" type="array">
-      <obj_property name="ElementShortName">secData[7:0]</obj_property>
-      <obj_property name="ObjectShortName">secData[7:0]</obj_property>
    </wvobject>
    <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/hrsData" type="array">
       <obj_property name="ElementShortName">hrsData[7:0]</obj_property>
       <obj_property name="ObjectShortName">hrsData[7:0]</obj_property>
    </wvobject>
    <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/cState" type="array">
-      <obj_property name="ElementShortName">cState[3:0]</obj_property>
-      <obj_property name="ObjectShortName">cState[3:0]</obj_property>
+      <obj_property name="ElementShortName">cState[2:0]</obj_property>
+      <obj_property name="ObjectShortName">cState[2:0]</obj_property>
       <obj_property name="CustomSignalColor">#FF0080</obj_property>
       <obj_property name="UseCustomSignalColor">true</obj_property>
-   </wvobject>
-   <wvobject fp_name="/tb_ds1302/dut/u_rtcRead/readSeq" type="array">
-      <obj_property name="ElementShortName">readSeq[2:0]</obj_property>
-      <obj_property name="ObjectShortName">readSeq[2:0]</obj_property>
-      <obj_property name="CustomSignalColor">#FF0080</obj_property>
-      <obj_property name="UseCustomSignalColor">true</obj_property>
-   </wvobject>
-   <wvobject type="divider" fp_name="divider91">
-      <obj_property name="label">.</obj_property>
-      <obj_property name="DisplayName">label</obj_property>
-      <obj_property name="BkColor">#808080</obj_property>
    </wvobject>
 </wave_config>

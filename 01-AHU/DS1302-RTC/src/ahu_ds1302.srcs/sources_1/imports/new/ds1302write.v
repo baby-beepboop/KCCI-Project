@@ -1,40 +1,45 @@
-// ds1302write v1.0.0: DS1302 RTC 칩에 1바이트 데이터 쓰기
-//             v2.0.0: FSM 동작 중복 로직 제거 및 수정
-// Protocol: CE High -> Command Write -> Data Write -> CE Low
+// ds1302write v3.0.0: 1바이트 core(ds1302core)를 이용한 쓰기 래퍼
+// en High -> CMD + DATA 1바이트 전송 -> Done High
 module ds1302write(
-    // 시스템 인터페이스
     input clk, rst,
 
-    input       en,              // 쓰기 요청 신호
-    input [7:0] addr,            // 쓰기 할 주소
-    input [7:0] dataIn,          // 쓸 데이터
+    input sclk,
+    input dataIn,
 
-    // DS1302 3-wire 인터페이스
-    input      sclk,             // DS1302 Serial Clock
-    output reg ce,               // DS1302 Chip Enable
+    input       en,
+    input [7:0] addr,
+    input [7:0] dataByte,
 
-    output reg ioDir,            // 1: 출력 모드, 0: 대기
-    output reg dataOut,          // DS1302 Bi-directional Data Line (Output Only)
+    output ce,
+    output ioDir,
+    output dataOut,
 
-    // 출력 인터페이스
-    output reg done              // 쓰기 완료 신호
+    output reg done
     );
 
-    reg sclkDelay;
-    wire sclkRising, sclkFalling;
+    localparam [1:0] IDLE=0, SEND=1, WAIT=2, FINISH=3;
+    reg [1:0] cState, nState;
 
-    localparam [3:0] IDLE=0, START=1, SEND_CMD=2, SEND_DATA=3, STOP=4;
-    reg [3:0] cState, nState;
+    wire coreDone;
+    wire coreCe, coreIoDir, coreOut;
 
-    reg [3:0] bitCnt;
-    reg [7:0] shiftReg;
+    assign ce = coreCe;
+    assign ioDir = coreIoDir;
+    assign dataOut = coreOut;
 
-    // SCLK 엣지 검출
-    always @(posedge clk) begin
-        sclkDelay <= sclk;
-    end
-    assign sclkRising = sclk & (~sclkDelay);
-    assign sclkFalling = (~sclk) & sclkDelay;
+    // DS1302 Core
+    ds1302core u_core (
+        .clk(clk), .rst(rst),
+        .sclk(sclk), .dataIn(dataIn),
+        .en(cState == SEND),
+        .rw(1'b0),
+        .cmd(addr),
+        .writeData(dataByte),
+        .ce(coreCe),
+        .ioDir(coreIoDir),
+        .dataOut(coreOut),
+        .readData(),
+        .done(coreDone));
 
     // FSM 상태 전이
     always @(posedge clk or posedge rst) begin
@@ -46,11 +51,10 @@ module ds1302write(
         nState = cState;
 
         case (cState)
-            IDLE:      if (en)                           nState = START;
-            START:                                       nState = SEND_CMD;
-            SEND_CMD:  if (sclkFalling && (bitCnt == 7)) nState = SEND_DATA;
-            SEND_DATA: if (sclkFalling && (bitCnt == 7)) nState = STOP;
-            STOP:                                        nState = IDLE;
+            IDLE:   if (en)       nState = SEND;
+            SEND:                 nState = WAIT;
+            WAIT:   if (coreDone) nState = FINISH;
+            FINISH:               nState = IDLE;
             default: nState = IDLE;
         endcase
     end
@@ -58,83 +62,24 @@ module ds1302write(
     // FSM 동작
     always @(posedge clk or posedge rst) begin
         if (rst) begin
-            ce <= 0; ioDir <= 0;
-            bitCnt <= 0; shiftReg <= 0;
-            dataOut <= 0; done <= 0;
+            done <= 0;
         end
 
         else begin
             done <= 1'b0;
 
-            if (sclkFalling) begin
-                if ((cState == SEND_CMD) || (cState == SEND_DATA)) begin
-                    shiftReg <= shiftReg >> 1;
-
-                    if (bitCnt < 7) begin
-                        dataOut <= shiftReg[1];
-                    end
-                    else if (cState == SEND_CMD) begin
-                        dataOut <= dataIn[0];
-                    end
-                end
-            end
-
             case (cState)
                 IDLE: begin
-                    ce <= 1'b0;
-                    ioDir <= 1'b0;
-                    bitCnt <= 0;
                 end
 
-                // Protocol: CE High
-                START: begin
-                    ce <= 1'b1;
-                    ioDir <= 1'b1;
-                    shiftReg <= addr;
-                    dataOut <= addr[0];
-                    bitCnt <= 0;
+                SEND: begin
                 end
 
-                // Protocol: Command Write (LSB first)
-                SEND_CMD: begin
-                    if (sclkFalling) begin
-                        if (bitCnt == 7) begin
-                            bitCnt <= 0;
-                            shiftReg <= dataIn;
-                            dataOut <= dataIn[0];
-                        end
-                        else begin
-                            bitCnt <= bitCnt + 1;
-                            shiftReg <= shiftReg >> 1;
-                            dataOut <= shiftReg[1];
-                        end
-                    end
+                WAIT: begin
                 end
 
-                SEND_DATA: begin
-                    if (sclkFalling) begin
-                        // Protocol: CE Low
-                        if (bitCnt == 7) begin
-                            bitCnt <= 0;
-                            ce <= 1'b0;
-                            ioDir <= 1'b0;
-                            done <= 1'b1;
-                            dataOut <= 0;
-                        end
-
-                        // Protocol: Data Write (LSB first)
-                        else begin
-                            bitCnt <= bitCnt + 1;
-                            shiftReg <= shiftReg >> 1;
-                            dataOut <= shiftReg[1];
-                        end
-                    end
-                end
-
-                STOP: begin
-                    ce <= 0;
-                    ioDir <= 0;
-                    done <= 0;
+                FINISH: begin
+                    done <= 1'b1;
                 end
             endcase
         end
