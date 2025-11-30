@@ -35,7 +35,6 @@ module top_ds1302(
 
     // ds1302read 입출력
     wire readEn;
-    wire readIn;
     wire readCe, readIoDir, readDone;
     wire readOut;
     wire [7:0] secData, minData, hrsData, dateData, monData, dayData, yrData;
@@ -80,19 +79,19 @@ module top_ds1302(
     // DS1302 쓰기 모듈
     ds1302write u_rtcWrite (
         .clk(clk), .rst(rst),
-        .en(writeEn), .addr(writeAddr), .dataIn(writeIn),
-        .sclk(sclk), .ce(writeCe),
-        .ioDir(writeIoDir), .dataOut(writeOut),
+        .sclk(sclk), .dataIn(dsData),
+        .en(writeEn), .addr(writeAddr), .dataByte(writeIn),
+        .ce(writeCe), .ioDir(writeIoDir), .dataOut(writeOut),
         .done(writeDone));
 
     // DS1302 읽기 모듈
     assign readEn = tick1s;
-    assign readIn = dsData;
 
     ds1302read u_rtcRead (
-        .clk(clk), .rst(rst), .en(readEn),
-        .sclk(sclk), .ce(readCe), .dataIn(readIn),
-        .ioDir(readIoDir), .dataOut(readOut),
+        .clk(clk), .rst(rst),
+        .sclk(sclk), .dataIn(dsData),
+        .en(readEn),
+        .ce(readCe), .ioDir(readIoDir), .dataOut(readOut),
         .secData(secData), .minData(minData), .hrsData(hrsData),
         .dateData(dateData), .monData(monData), .dayData(dayData), .yrData(yrData),
         .done(readDone));

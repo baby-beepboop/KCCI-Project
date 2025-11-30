@@ -1,4 +1,4 @@
-// tb_ds1302 v1.0.0: DS1302 FND 동작 확인
+// tb_ds1302 v2.0.0: DS1302 Chip Model 수정
 `timescale 1ns / 1ps
 
 module tb_ds1302;
@@ -20,6 +20,9 @@ module tb_ds1302;
 
     assign dsData = (dsIoDir) ? dsOut : 1'bz;
 
+    initial clk = 0;
+    always #5 clk = ~clk;
+
     // 가상 RTC 메모리 (0: Sec, 1: Min, 2: Hr, ...)
     reg [7:0] rtcMem [0:31];
 
@@ -30,126 +33,117 @@ module tb_ds1302;
         .an(an), .seg(seg), .dp(dp),
         .RsRx(), .RsTx());
 
-    initial clk = 0;
-    always #5 clk = ~clk;
-
+    // SCLK 엣지 검출
     reg sclkPrev;
     always @(posedge clk) sclkPrev <= sclk;
+    wire sclkRise = sclk && (~sclkPrev);
+    wire sclkFall = (~sclk) && sclkPrev;
 
     // DS1302 Chip Model
-    reg [7:0] cmdReg, dataReg;
-    reg       readCmd;
+    reg [7:0] cmdShift, dataShift;
     reg [3:0] bitCnt;
+    reg       readCmd;
+    reg       writing;
 
-    localparam IDLE=0, CMD=1, WRITE=2, READ=3;
+    localparam IDLE=0, CMD=1, READ=2, WRITE=3;
     reg [1:0] state;
 
     always @(posedge clk or posedge rst) begin
         if (rst) begin
             state <= IDLE;
             dsIoDir <= 0;
-            bitCnt <= 0; cmdReg <= 0; dataReg <= 0;
+            bitCnt <= 0;
+            dsOut <= 0;
+            readCmd <= 0; writing <= 0;
             rtcMem[0] = 8'h00; rtcMem[1] = 8'h00; rtcMem[2] = 8'h12;
-            $display("[%0t] [Model] RTC Memory Init: Sec=%h, Min=%h, Hr=%h", $time, rtcMem[0], rtcMem[1], rtcMem[2]);
+            rtcMem[3] = 8'h01; rtcMem[4] = 8'h01; rtcMem[5] = 8'h00; rtcMem[6] = 8'h00;
         end
         else if (!ce) begin    // CE Low: 통신 초기화
             state <= IDLE;
             dsIoDir <= 0;
-            bitCnt <= 0; cmdReg <= 0; dataReg <= 0;
-            $display("[%0t] [Model] CE Low. State Reset to IDLE. dsIoDir=0 (Input/High-Z)", $time);
+            bitCnt <= 0;
         end
 
         // CE High: 통신 활성화
         else begin
-            // SCLK 상승 엣지: DUT -> RTC 방향 데이터 샘플링
-            if (sclk && !sclkPrev) begin
-                case (state)
-                    IDLE: begin
+            case (state)
+                IDLE: begin
+                    if (sclkRise) begin
                         state <= CMD;
                         bitCnt <= 0;
-                        cmdReg[0] <= dsData;
-                        $display("[%0t] [Model] Start CMD receive. bit=%b", $time, dsData);
                     end
+                end
 
-                    CMD: begin
+                // CMD 수신 (LSB fist, SCLK 상승 엣지 샘플링)
+                CMD: begin
+                    if (sclkRise) begin
+                        cmdShift[bitCnt] <= dsData;
                         bitCnt <= bitCnt + 1;
-                        cmdReg[bitCnt] <= dsData;
+
                         if (bitCnt == 7) begin
-                            readCmd = cmdReg[0];
-                            $display("[%0t] [Model] CMD Received: %h (RW Bit: %b)", $time, cmdReg, cmdReg[0]);
-                            
+                            readCmd = cmdShift[0];
+                            writing = ~readCmd;
                             bitCnt <= 0;
-                            // Read 명령
-                            if (cmdReg[7:1]) begin
-                                case (cmdReg[7:1])
-                                    7'h40: dataReg = rtcMem[0];    // Sec
-                                    7'h41: dataReg = rtcMem[1];    // Min
-                                    7'h42: dataReg = rtcMem[2];    // Hr
-                                    default: dataReg = 8'h00;
+
+                            if (readCmd) begin
+                                case (cmdShift[7:1])
+                                    7'h40: dataShift = rtcMem[0];
+                                    7'h41: dataShift = rtcMem[1];
+                                    7'h42: dataShift = rtcMem[2];
+                                    7'h43: dataShift = rtcMem[3];
+                                    7'h44: dataShift = rtcMem[4];
+                                    7'h45: dataShift = rtcMem[5];
+                                    7'h46: dataShift = rtcMem[6];
+                                    default: dataShift = 8'h00;
                                 endcase
-                                dsIoDir <= 1'b1;        // Read Mode: Output Enable
-                                dsOut <= dataReg[0];    // LSB 출력
+
+                                dsIoDir <= 1'b1;
                                 state <= READ;
-                                $display("[%0t] [Model] READ CMD! dsIoDir=1 (Output Enable). Sending Data=%h (LSB=%b)",
-                                         $time, dataReg, dataReg[0]);
                             end
-
-                            // Write 명령
                             else begin
-                                state <= WRITE;
                                 dsIoDir <= 1'b0;
-                                $display("[%0t] [Model] WRITE CMD! dsIoDir=0 (Input/High-Z)", $time);
+                                state <= WRITE;
                             end
                         end
                     end
+                end
 
-                    // Write Mode: 데이터 수신
-                    WRITE: begin
-                        dataReg[bitCnt] <= dsData;
+                // Read Mode (LSB first, SCLK 하강 엣지 시프트)
+                READ: begin
+                    if (sclkFall) begin
+                        dataShift <= dataShift >> 1;
+                        dsOut <= dataShift[1];
                         bitCnt <= bitCnt + 1;
-                        if (bitCnt == 7) begin
-                            case (cmdReg[7:1])
-                                7'h40: rtcMem[0] <= dataReg;
-                                7'h41: rtcMem[1] <= dataReg;
-                                7'h42: rtcMem[2] <= dataReg;
-                            endcase
-                            $display("[%0t] [Model] WRITE DONE! Addr=%h Data=%h", $time, cmdReg, dataReg);
-                        
-                            state <= IDLE;
-                            bitCnt <= 0;
-                        end
-                    end
 
-                    // Read Mode: 데이터 전송
-                    READ: begin
-                        bitCnt <= bitCnt + 1;
                         if (bitCnt == 7) begin
                             state <= IDLE;
                             dsIoDir <= 1'b0;
-                            bitCnt <= 0;
-                            $display("[%0t] [Model] READ DONE! dsIoDir=0 (Input/High-Z)", $time);
                         end
                     end
-                endcase
-            end
-
-            // SLCK 하강 엣지: RTC -> DUT 방향 데이터 시프트 (READ 모드)
-            if (!sclk && sclkPrev) begin
-                if (state == READ) begin
-                    dataReg <= dataReg >> 1;
-                    dsOut <= cmdReg[1];
-                    $display("[%0t] [Model] READ SHIFT. Next bit=%b, dataReg=%h", $time, dataReg[1], (dataReg >> 1));
                 end
-            end
-        end
-    end
 
-    always @(sclk or ce) begin
-        if (ce) begin
-            if (sclk != sclkPrev) begin
-                $display("[%0t] [MONITOR] SCLK %s, dsData=%b, DUT ioDir=%b, TB dsIoDir=%b",
-                         $time, sclk ? "RISING" : "FALLING", dsData, dut.u_rtcRead.ioDir, dsIoDir);
-            end
+                // Write Mode (LSB fist, SCLK 상승 엣지 샘플링)
+                WRITE: begin
+                    if (sclkRise) begin
+                        dataShift[bitCnt] <= dsData;
+                        bitCnt <= bitCnt + 1;
+
+                        if (bitCnt == 7) begin
+                            case (cmdShift[7:1])
+                                7'h40: rtcMem[0] <= dataShift;
+                                7'h41: rtcMem[1] <= dataShift;
+                                7'h42: rtcMem[2] <= dataShift;
+                                7'h43: rtcMem[3] <= dataShift;
+                                7'h44: rtcMem[4] <= dataShift;
+                                7'h45: rtcMem[5] <= dataShift;
+                                7'h46: rtcMem[6] <= dataShift;
+                            endcase
+
+                            state <= IDLE;
+                        end
+                    end
+                end
+            endcase
         end
     end
 
@@ -172,12 +166,12 @@ module tb_ds1302;
         force dut.tick1s = 1'b1;
         #10 force dut.tick1s = 1'b0;
         
-        #320000;
+        #1120000;
         $display("[%0t] [Step 1 Check] Hour Read DUT: %h (Expected: 12)", $time, dut.u_rtcRead.hrsData);
         #1000;
 
         // Step 2: 시간 편집 및 저장 (12 -> 13)
-        sw = 7'b0000010;
+        sw = 7'b0000100;
         $display("[%0t] [Step 2-1] Enter Hours Edit Mode", $time);
         #1000;
 
@@ -191,7 +185,7 @@ module tb_ds1302;
         #20 force dut.reBtnEdge = 1'b0;
 
         $display("[%0t] [Wait] Waiting for Write Sequence to Complete...", $time);
-        #100000;
+        #600000;
         $display("[%0t] [Step 2 Check] RTC Memory Hour Value: %h (Expected: 13)", $time, rtcMem[2]);
         #1000;
 
@@ -210,7 +204,7 @@ module tb_ds1302;
         $display("RTC Memory Addr 84 (Hour): %h", rtcMem[2]);
         $display("Top Module Read Hrs: %h", dut.u_rtcRead.hrsData);
         $display("------------------------------------------------------------------------------------------------------");
-
+        
         $finish;
     end
 
