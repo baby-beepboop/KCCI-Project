@@ -1,4 +1,4 @@
-// rotary v1.0: 로터리 엔코더 입력을 받아 CW/CCW 펄스 생성
+// rotary v1.0.0: 로터리 엔코더 입력을 받아 CW/CCW 펄스 생성
 module rotary(
     input clk, rst,
 

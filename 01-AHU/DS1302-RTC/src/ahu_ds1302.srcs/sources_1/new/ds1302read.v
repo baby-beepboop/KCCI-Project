@@ -1,4 +1,5 @@
-// ds1302read v1.0.0: DS1302 RTC 칩에서 초, 분, 시, 날짜 등 7가지 레지스터 데이터를 순차적으로 읽기
+// ds1302read v2.0.0: 시프트 로직 수정, FSM 단순화
+//            v2.0.1: readSeq 인덱스 오류 수정
 // Protocol: CE High -> Command Write -> Data Read -> CE Low
 module ds1302read(
     // 시스템 인터페이스
@@ -22,15 +23,15 @@ module ds1302read(
     reg sclkDelay;
     wire sclkRising, sclkFalling;
 
-    reg [2:0] dataBitCnt;    // 전송/수신된 비트 카운터 (0-7)
+    reg [2:0] bitCnt;    // 전송/수신된 비트 카운터 (0-7)
     reg [7:0] shiftReg;
 
-    localparam IDLE=0, START_CMD=1, SEND_ADDR_H=2, SEND_ADDR_L=3, TURN_IO=4, READ_DATA_H=5, READ_DATA_L=6, STOP_CMD=7;
+    localparam [3:0] IDLE=0, START=1, SEND_CMD=2, TURN_IO=3, RECEIVE_DATA=4, STOP=5;
     reg [3:0] cState, nState;
 
     localparam [7:0] SEC_ADDR = 8'h81, MIN_ADDR = 8'h83, HRS_ADDR = 8'h85,
                      DATE_ADDR = 8'h87, MON_ADDR = 8'h89, DAY_ADDR = 8'h8B, YR_ADDR = 8'h8D;
-    reg [2:0] readSeq;
+    reg [2:0] readSeq;    // 읽은 레지스터 순서 (0-6)
     reg [7:0] nAddr;
 
     // SCLK 엣지 검출
@@ -50,24 +51,12 @@ module ds1302read(
         nState = cState;
 
         case (cState)
-            IDLE:        if (en)         nState = START_CMD;
-            START_CMD:                   nState = SEND_ADDR_H;
-            SEND_ADDR_H: if (sclkRising) nState = SEND_ADDR_L;
-            SEND_ADDR_L: begin
-                if (sclkFalling) begin
-                    if (dataBitCnt == 7) nState = TURN_IO;
-                    else nState = SEND_ADDR_H;
-                end
-            end
-            TURN_IO:                     nState = READ_DATA_H;
-            READ_DATA_H: if (sclkRising) nState = READ_DATA_L;
-            READ_DATA_L: begin
-                if (sclkFalling) begin
-                    if (dataBitCnt == 7) nState = STOP_CMD;
-                    else nState = READ_DATA_H;
-                end
-            end
-            STOP_CMD:                    nState = (readSeq == 6) ? IDLE : START_CMD;
+            IDLE:         if (en)                           nState = START;
+            START:                                          nState = SEND_CMD;
+            SEND_CMD:     if (sclkFalling && (bitCnt == 7)) nState = TURN_IO;
+            TURN_IO:      if (sclkFalling)                  nState = RECEIVE_DATA;
+            RECEIVE_DATA: if (sclkFalling && (bitCnt == 7)) nState = STOP;
+            STOP:                                           nState = (readSeq == 6) ? IDLE : START;
             default: nState = IDLE;
         endcase
     end
@@ -75,11 +64,11 @@ module ds1302read(
     // FSM 동작
     always @(posedge clk or posedge rst) begin
         if (rst) begin
-            ce <= 0; ioDir <= 0; done <= 0;
+            ce <= 0; ioDir <= 0;
+            bitCnt <= 0; shiftReg <= 0;
+            dataOut <= 0; done <= 0;
             readSeq <= 0; nAddr <= SEC_ADDR;
-            dataBitCnt <= 0; shiftReg <= 0; dataOut <= 0;
-            secData <= 0; minData <= 0; hrsData <= 0;
-            dateData <= 0; monData <= 0; dayData <= 0; yrData <= 0;
+            secData <= 0; minData <= 0; hrsData <= 0; dateData <= 0; monData <= 0; dayData <= 0; yrData <= 0;
         end
 
         else begin
@@ -87,72 +76,75 @@ module ds1302read(
 
             case (cState)
                 IDLE: begin
+                    ce <= 1'b0;
+                    ioDir <= 1'b0;
                     if (en) begin
                         readSeq <= 0;
                         nAddr <= SEC_ADDR;
-                        shiftReg <= SEC_ADDR;
-                        ioDir <= 1'b1;
-                        dataBitCnt <= 0;
-                        dataOut <= 0;
+                        $display("[%0t] [DUT] Read Started for Addr %h", $time, SEC_ADDR);
                     end
                 end
 
                 // Protocol: CE High
-                START_CMD: begin
+                START: begin
                     ce <= 1'b1;
+                    ioDir <= 1'b1;
                     shiftReg <= nAddr;
-                    dataOut <= shiftReg[0];
+                    bitCnt <= 0;
+                    dataOut <= nAddr[0];
+                    $display("[%0t] [DUT] CE High. Start sending Addr %h. ioDir=1 (Output)", $time, nAddr);
                 end
-                
-                // Protocol: Command(0x81) Write (LSB first)
-                SEND_ADDR_H: begin
-                    dataOut <= shiftReg[0];
-                end
-                SEND_ADDR_L: begin
-                    dataOut <= shiftReg[0];
+
+                // Protocol: Command Write (LSB first)
+                SEND_CMD: begin
                     if (sclkFalling) begin
-                        dataBitCnt <= dataBitCnt + 1;
                         shiftReg <= shiftReg >> 1;
+
+                        if (bitCnt == 7) begin
+                            bitCnt <= 0;
+                            $display("[%0t] [DUT] Address Sent Complete (Addr: %h)", $time, nAddr);
+                        end
+                        else begin
+                            bitCnt <= bitCnt + 1;
+                            dataOut <= shiftReg[1];
+                        end
                     end
                 end
+
                 TURN_IO: begin
-                    ioDir <= 1'b0;
-                    dataBitCnt <= 0;
                     shiftReg <= 0;
-                    dataOut <= 0;
                 end
 
                 // Protocol: Data Read (LSB first)
-                READ_DATA_H: begin
+                RECEIVE_DATA: begin
+                    ioDir <= 0;
+
                     if (sclkRising) begin
-                        shiftReg <= {dataIn, shiftReg[7:1]};
-                    end
-                end
-                READ_DATA_L: begin
-                    if (sclkFalling) begin
-                        dataBitCnt <= dataBitCnt + 1;
+                        shiftReg[bitCnt] <= dataIn;
+                        if (bitCnt == 7) begin
+                            bitCnt <= 0;
+                            $display("[%0t] [DUT] BYTE RECIEVE DONE. Value=%h", $time, shiftReg);
+                        end
+                        else begin
+                            bitCnt <= bitCnt + 1;
+                        end
                     end
                 end
 
                 // Protocol: CE Low
-                STOP_CMD: begin
+                STOP: begin
                     case (readSeq)
                         3'd0: secData <= shiftReg;
                         3'd1: minData <= shiftReg;
                         3'd2: hrsData <= shiftReg;
-                        2'd3: dateData <= shiftReg;
+                        3'd3: dateData <= shiftReg;
                         3'd4: monData <= shiftReg;
                         3'd5: dayData <= shiftReg;
                         3'd6: yrData <= shiftReg;
                     endcase
+                    $display("[%0t] [DUT] Data Received: Addr=%h, Value=%h (readSeq=%d)", $time, nAddr, shiftReg, readSeq);
 
-                    ce <= 1'b0;
-                    ioDir <= 0;
-
-                    if (readSeq == 6) begin
-                        done <= 1'b1;
-                    end
-                    else begin
+                    if (readSeq != 3'd6) begin
                         readSeq <= readSeq + 1;
                         case (readSeq + 1)
                             3'd1: nAddr <= MIN_ADDR;
@@ -163,6 +155,11 @@ module ds1302read(
                             3'd6: nAddr <= YR_ADDR;
                             default: nAddr <= 0;
                         endcase
+                    end
+                    else begin
+                        ce <= 1'b0;
+                        done <= 1'b1;
+                        $display("[%0t] [DUT] All Read Cycles Complete.", $time);
                     end
                 end
             endcase
