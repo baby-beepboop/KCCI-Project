@@ -5,7 +5,7 @@ module top_ds1302(
     inout  dsData,
 
     input       btnR,
-    input [5:0] sw,
+    input [6:0] sw,
     input       reA, reB, reBtn,
 
     output [15:0] led,
@@ -17,21 +17,34 @@ module top_ds1302(
     output RsTx
     );
 
+    // tickGen 출력
     wire tick1s, tick1ms;
 
+    // debouncer 출력
     wire btnPulse;
+    wire reAdb, reBdb, reBtnDb;
 
+    // 로터리 입력 펄스
+    wire reCw, reCcw, reBtnEdge;
+
+    // ds1302write 입출력
+    wire writeEn;
+    wire [7:0] writeAddr, writeIn;
+    wire writeCe, writeIoDir, writeDone;
+    wire writeOut;
+
+    // ds1302read 입출력
+    wire readEn;
+    wire readIn;
+    wire readCe, readIoDir, readDone;
+    wire readOut;
+    wire [7:0] secData, minData, hrsData, dateData, monData, dayData, yrData;
+
+    // fndCtrl 입력
     wire [3:0] fndD0, fndD1, fndD2, fndD3;
     wire [1:0] fndDot;
 
-    wire readEn;
-    wire readIn;
-    wire ioDir, readOut;
-
-    wire [7:0] secData, minData, hrsData, dateData, monData, dayData, yrData;
-
-    wire readDone;
-
+    // UART 출력
     wire [7:0] rxOut;
 
     // Serial Clock 생성
@@ -59,8 +72,18 @@ module top_ds1302(
         // from ds1302read
         .minData(minData), .hrsData(hrsData),
         .dateData(dateData), .monData(monData), .dayData(dayData), .yrData(yrData),
+        // to ds1302write
+        .writeEn(writeEn), .writeAddr(writeAddr), .writeData(writeIn),
         // to fndCtrl
         .fndD0(fndD0), .fndD1(fndD1), .fndD2(fndD2), .fndD3(fndD3), .fndDot(fndDot));
+
+    // DS1302 쓰기 모듈
+    ds1302write u_rtcWrite (
+        .clk(clk), .rst(rst),
+        .en(writeEn), .addr(writeAddr), .dataIn(writeIn),
+        .sclk(sclk), .ce(writeCe),
+        .ioDir(writeIoDir), .dataOut(writeOut),
+        .done(writeDone));
 
     // DS1302 읽기 모듈
     assign readEn = tick1s;
@@ -75,10 +98,11 @@ module top_ds1302(
         .done(readDone));
 
     // DS1302 CE
-    assign ce = readCe;
+    assign ce = writeCe | readCe;
 
     // DS1302 Data I/O (Tristate Buffer Control)
-    assign dsData = (readIoDir) ? readOut : 1'bz;
+    assign dsData = (writeIoDir) ? writeOut :
+                    (readIoDir)  ? readOut : 1'bz;
 
     // FND 컨트롤러
     fndCtrl u_fndCtrl (
