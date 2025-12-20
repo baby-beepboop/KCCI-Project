@@ -4,7 +4,8 @@ module uart2cmd(
     input clk,
     input reset,
     input [7:0] rx_data,
-    input rx_done,
+    input rx_valid,
+	output logic rx_ready,
     output cmd_runstop,
     output cmd_clear,
     output cmd_mode,
@@ -23,6 +24,10 @@ assign cmd_clear = c_cmd_clear;
 assign cmd_mode = c_cmd_mode;
 assign cmd_status = c_cmd_status;
 assign cmd_set1234 = c_cmd_set1234;
+
+wire rx_fire;
+assign rx_ready = 1;                
+assign rx_fire  = rx_valid && rx_ready;
 
     always_ff @(posedge clk, posedge reset) begin
         if (reset) begin
@@ -52,7 +57,7 @@ assign cmd_set1234 = c_cmd_set1234;
 
         case (c_state)
             IDLE : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "/") begin
                         n_state = P_SLASH;
                     end else begin
@@ -67,7 +72,7 @@ assign cmd_set1234 = c_cmd_set1234;
                 end
             end 
             P_SLASH : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "s") begin
                         n_state = P_S;
                     end else begin
@@ -77,7 +82,7 @@ assign cmd_set1234 = c_cmd_set1234;
 
             end 
             P_S : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "e") begin
                         n_state = P_E;
                     end else begin
@@ -86,7 +91,7 @@ assign cmd_set1234 = c_cmd_set1234;
                 end
             end 
             P_E : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "t") begin
                         n_state = P_T;
                     end else begin
@@ -95,7 +100,7 @@ assign cmd_set1234 = c_cmd_set1234;
                 end
             end 
             P_T : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "1") begin
                         n_state = P_1;
                     end else begin
@@ -104,7 +109,7 @@ assign cmd_set1234 = c_cmd_set1234;
                 end
             end 
             P_1 : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "2") begin
                         n_state = P_2;
                     end else begin
@@ -113,7 +118,7 @@ assign cmd_set1234 = c_cmd_set1234;
                 end
             end 
             P_2 : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "3") begin
                         n_state = P_3;
                     end else begin
@@ -122,7 +127,7 @@ assign cmd_set1234 = c_cmd_set1234;
                 end
             end
             P_3 : begin
-                if (rx_done) begin
+                if (rx_fire) begin
                     if (rx_data == "4") begin
                         n_cmd_set1234 = 1;
                         n_state = IDLE;

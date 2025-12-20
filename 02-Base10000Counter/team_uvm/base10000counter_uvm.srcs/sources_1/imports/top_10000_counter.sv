@@ -8,6 +8,7 @@ module top_10000_counter (
     input        run_stop,
     input        rx,
     output       tx,
+
     output [3:0] fnd_com,
     output [7:0] fnd_data
 );
@@ -19,9 +20,9 @@ module top_10000_counter (
     wire cmd_runstop, cmd_mode, cmd_clear, cmd_status, cmd_set1234;
     wire i_runstop, i_mode, i_clear;
     wire o_clear, o_mode, o_runstop, o_set1234;
-    wire tx_start, tx_busy, rx_done;
+    wire tx_valid, tx_ready, rx_valid, rx_ready;
 
-    btn_debouncer u_btn_runstop (
+   btn_debouncer u_btn_runstop (
         .clk  (clk),
         .reset(reset),
         .i_btn(run_stop),
@@ -46,19 +47,21 @@ module top_10000_counter (
         .clk(clk),
         .reset(reset),
         .rx(rx),
-        .tx_start(tx_start),
         .tx_data(status_data),
-        .rx_done(rx_done),
+        .tx_valid(tx_valid),
+        .tx_ready(tx_ready),
+        .rx_ready(rx_ready),
+        .rx_valid(rx_valid),
         .rx_data(rx_data),
-        .tx(tx),
-        .tx_busy(tx_busy)
+        .tx(tx)
     );
 
     uart2cmd u_uart2cmd (
         .clk(clk),
         .reset(reset),
         .rx_data(rx_data),
-        .rx_done(rx_done),
+        .rx_valid(rx_valid),
+        .rx_ready(rx_ready),
         .cmd_runstop(cmd_runstop),
         .cmd_clear(cmd_clear),
         .cmd_mode(cmd_mode),
@@ -87,9 +90,9 @@ module top_10000_counter (
         .st_mode(o_mode),
         .st_runstop(o_runstop),
         .cmd_status(cmd_status),
-        .tx_busy(tx_busy),
-        .status_data(status_data),
-        .tx_start(tx_start)
+        .tx_ready(tx_ready),
+        .tx_valid(tx_valid),
+        .status_data(status_data)
     );
 
     control_unit u_control_unit (

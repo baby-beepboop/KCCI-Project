@@ -7,12 +7,12 @@ module status2uart (
     input st_mode,
     input st_runstop,
     input cmd_status,
-    input tx_busy,
-    output logic [7:0] status_data,
-    output logic tx_start
+    input tx_ready,
+	output logic tx_valid,
+    output logic [7:0] status_data
 );
 
-    typedef enum logic [1:0] {IDLE, WAIT, SEND} STATE_B;
+    typedef enum logic [1:0] {IDLE, SEND} STATE_B;
 
     STATE_B c_state, n_state;
     logic [5:0] c_idx, n_idx;
@@ -70,31 +70,26 @@ module status2uart (
 
         n_state = c_state;
         n_idx = c_idx;
-        tx_start = 0;
+        tx_valid = 0;
         status_data = 0;
 
         case (c_state)
             IDLE: begin
                 if (cmd_status) begin
                     n_idx = 0;
-                    n_state = WAIT;
-                end
-            end
-
-            WAIT: begin
-                if (!tx_busy) begin
-                    tx_start = 1;
                     n_state = SEND;
                 end
             end
 
             SEND: begin
-                if (c_idx < 35) begin
-                    n_state = WAIT;
-                    n_idx = c_idx + 1;
+                tx_valid = 1'b1;
 
-                end else begin
-                    n_state = IDLE;
+                if (tx_valid && tx_ready) begin
+                    if (c_idx < 35) begin
+                        n_idx = c_idx + 1;
+                    end else begin
+                        n_state = IDLE;
+                    end
                 end
             end
         endcase

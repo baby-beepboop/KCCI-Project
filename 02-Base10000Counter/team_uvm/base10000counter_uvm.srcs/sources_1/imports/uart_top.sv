@@ -4,123 +4,224 @@ module uart_top (
     input        clk,
     input        reset,
     input        rx,
-    input        tx_start,
+    input        tx_valid,
     input  [7:0] tx_data,
-    output       rx_done,
+    input        rx_ready,
+    output       rx_valid,
     output [7:0] rx_data,
-    output       tx,
-    output       tx_busy
+    output       tx_ready,
+    output       tx
 );
 
-    logic w_rxdone;
-    logic fifo_rx_empty;
-    logic c_fifo_rx_rd, n_fifo_rx_rd;
-    logic fifo_tx_wr, fifo_tx_rd;
-    logic fifo_tx_full, fifo_tx_empty;
-    logic w_txstart;
-    logic w_txbusy;
-    logic fifo_rx_pulse;
-
     localparam BPS_VAL = 9600;
-    wire baudTick;
+
+    wire       baudTick;
     wire [3:0] baudTickCnt;
+    wire       rx_done;
+    wire [7:0] rx_byte;
 
-    logic [7:0] w_rxdata;
-    logic [7:0] w_rdata;
-    logic [7:0] w_txdata;
-    logic [7:0] fifo_tx_wdata;
-
-    assign n_fifo_rx_rd = ~fifo_tx_full & ~fifo_rx_empty;
-    assign rx_data = w_rdata;
-    assign rx_done = fifo_rx_pulse;
-    assign fifo_tx_wr = fifo_rx_pulse | tx_start;
-    assign fifo_tx_rd = ~w_txbusy & ~fifo_tx_empty;
-    assign w_txstart = ~fifo_tx_empty;
-
-    uart_rx #(.BPS(BPS_VAL)) u_uartRx (
-        .clk(clk), .rst(reset),
-        .baudTick(baudTick), .baudTickCnt(baudTickCnt),
-        .dataIn(rx),
-        .done(w_rxdone),
-        .dataOut(w_rxdata));
-
-    fifo_rx u_fifo_rx (
-        .clk(clk),
-        .reset(reset),
-        .wr(w_rxdone),
-        .rd(fifo_rx_pulse),
-        .wdata(w_rxdata),
-        .rdata(w_rdata),
-        .full(),
-        .empty(fifo_rx_empty)
+    uart_rx #(
+        .BPS(BPS_VAL)
+    ) u_uartRx (
+        .clk        (clk),
+        .rst        (reset),
+        .baudTick   (baudTick),
+        .baudTickCnt(baudTickCnt),
+        .dataIn     (rx),
+        .done       (rx_done),
+        .dataOut    (rx_byte)
     );
+
+    wire rx_push = rx_done;
+    wire rx_cmd_empty;
+    wire [7:0] rx_cmd_rdata;
+
+    fifo_rx u_rx_cmd_fifo (
+        .clk  (clk),
+        .reset(reset),
+        .wr   (rx_push),
+        .rd   (rx_valid && rx_ready),
+        .wdata(rx_byte),
+        .rdata(rx_cmd_rdata),
+        .full (),
+        .empty(rx_cmd_empty)
+    );
+
+    assign rx_valid = ~rx_cmd_empty;
+    assign rx_data  = rx_cmd_rdata;
+
+    wire rx_echo_empty;
+    wire [7:0] rx_echo_rdata;
+    wire rx_echo_rd;
+
+    fifo_rx u_rx_echo_fifo (
+        .clk  (clk),
+        .reset(reset),
+        .wr   (rx_push),
+        .rd   (rx_echo_rd),
+        .wdata(rx_byte),
+        .rdata(rx_echo_rdata),
+        .full (),
+        .empty(rx_echo_empty)
+    );
+
+    wire       tx_fifo_full;
+    wire       tx_fifo_empty;
+    wire [7:0] tx_fifo_rdata;
+    wire       tx_fifo_wr;
+    wire [7:0] tx_fifo_wdata;
+    wire       tx_fifo_rd;
 
     fifo_tx u_fifo_tx (
-        .clk(clk),
+        .clk  (clk),
         .reset(reset),
-        .wr(fifo_tx_wr),
-        .rd(fifo_tx_rd),
-        .wdata(fifo_tx_wdata),
-        .rdata(w_txdata),
-        .full(fifo_tx_full),
-        .empty(fifo_tx_empty)
+        .wr   (tx_fifo_wr),
+        .rd   (tx_fifo_rd),
+        .wdata(tx_fifo_wdata),
+        .rdata(tx_fifo_rdata),
+        .full (tx_fifo_full),
+        .empty(tx_fifo_empty)
     );
 
-    uart_tx #(.BPS(BPS_VAL)) u_uartTx (
-        .clk(clk), .rst(reset),
-        .baudTick(baudTick), .baudTickCnt(baudTickCnt),
-        .en(w_txstart), .dataIn(w_txdata),
-        .busy(w_txbusy), .done(),
-        .dataOut(tx));
+    wire out_ready = ~tx_fifo_full;
+    wire out_valid;
+    wire [7:0] out_data;
+    wire echo_ready;
+    wire status_ready_i;
 
-    baudTickGen #(.BPS(BPS_VAL)) u_baudTickGen (
-    .clk(clk), .rst(reset), .tick(baudTick), .tickCnt(baudTickCnt));
+    tx_arbiter u_tx_arbiter (
+        .clk            (clk),
+        .reset      (reset),
+        .out_ready     (out_ready),
+        .loopback_valid(~rx_echo_empty),
+        .loopback_data (rx_echo_rdata),
+        .status_valid  (tx_valid),
+        .status_data   (tx_data),
+        .loopback_ready(echo_ready),
+        .status_ready  (status_ready_i),
+        .out_valid     (out_valid),
+        .out_data      (out_data)
+    );
+
+    assign tx_ready      = status_ready_i;
+    assign tx_fifo_wr    = out_valid && out_ready;
+    assign tx_fifo_wdata = out_data;
+    assign rx_echo_rd    = echo_ready;
+
+    reg  [7:0] tx_hold;
+    reg        tx_start;
+    wire       tx_busy;
+    wire       can_start_tx = ~tx_busy && ~tx_fifo_empty;
+
+    assign tx_fifo_rd = tx_start;
 
     always_ff @(posedge clk, posedge reset) begin
         if (reset) begin
-            c_fifo_rx_rd <= 0;
+            tx_start <= 1'b0;
+            tx_hold  <= 8'h00;
         end else begin
-            c_fifo_rx_rd <= n_fifo_rx_rd;
+            tx_start <= 1'b0;
+            if (can_start_tx) begin
+                tx_hold  <= tx_fifo_rdata;
+                tx_start <= 1'b1;
+            end
         end
     end
 
-    assign fifo_rx_pulse = ~c_fifo_rx_rd & n_fifo_rx_rd;
+    uart_tx #(
+        .BPS(BPS_VAL)
+    ) u_uartTx (
+        .clk        (clk),
+        .rst        (reset),
+        .baudTick   (baudTick),
+        .baudTickCnt(baudTickCnt),
+        .en         (tx_start),
+        .dataIn     (tx_hold),
+        .busy       (tx_busy),
+        .done       (),
+        .dataOut    (tx)
+    );
 
-    assign fifo_tx_wdata = (tx_start) ? tx_data : w_rdata;
-
-    assign tx_busy = fifo_tx_full;
+    baudTickGen #(
+        .BPS(BPS_VAL)
+    ) u_baudTickGen (
+        .clk    (clk),
+        .rst    (reset),
+        .tick   (baudTick),
+        .tickCnt(baudTickCnt)
+    );
 
 endmodule
 
-module baudTickGen #(
-    parameter BPS = 9600
-)(
-    input clk, rst,
 
-    output reg       tick,
-    output reg [3:0] tickCnt
-    );
+module tx_arbiter (
+    input              clk,
+    input              reset,
 
-    localparam CLKS_PER_BIT = 100_000_000 / (BPS * 16);    // = 651
-    logic [$clog2(CLKS_PER_BIT)-1:0] clkCnt;
+    input              out_ready,
 
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
-            clkCnt <= 0;
-            tick <= 0;
-            tickCnt <= 0;
+    input              loopback_valid,
+    input        [7:0] loopback_data,
+    output logic       loopback_ready,
+
+    input              status_valid,
+    input        [7:0] status_data,
+    output logic       status_ready,
+
+    output logic       out_valid,
+    output logic [7:0] out_data
+);
+
+    // 0: loopback, 1: status
+    logic last_grant;
+
+    logic grant_loopback;
+    logic grant_status;
+
+    // ---------------------------
+    // 1) Grant 결정
+    // ---------------------------
+    always_comb begin
+        grant_loopback = 1'b0;
+        grant_status   = 1'b0;
+
+        if (out_ready) begin
+            case ({loopback_valid, status_valid})
+                2'b10: grant_loopback = 1'b1;
+                2'b01: grant_status   = 1'b1;
+                2'b11: begin
+                    // round-robin
+                    if (last_grant == 1'b0)
+                        grant_status = 1'b1;
+                    else
+                        grant_loopback = 1'b1;
+                end
+                default: ;
+            endcase
         end
+    end
 
-        else begin
-            if (clkCnt == CLKS_PER_BIT - 1) begin
-                clkCnt <= 0;
-                tick <= 1'b1;
-                tickCnt <= tickCnt + 1;
-            end
-            else begin
-                clkCnt <= clkCnt + 1;
-                tick <= 1'b0;
-            end
+    // ---------------------------
+    // 2) Output
+    // ---------------------------
+    always_comb begin
+        out_valid      = grant_loopback | grant_status;
+        out_data       = grant_loopback ? loopback_data : status_data;
+        loopback_ready = grant_loopback;
+        status_ready   = grant_status;
+    end
+
+    // ---------------------------
+    // 3) State update
+    // ---------------------------
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            last_grant <= 1'b0; // reset 후 loopback 우선
+        end else if (out_ready && out_valid) begin
+            if (grant_loopback)
+                last_grant <= 1'b0;
+            else if (grant_status)
+                last_grant <= 1'b1;
         end
     end
 
