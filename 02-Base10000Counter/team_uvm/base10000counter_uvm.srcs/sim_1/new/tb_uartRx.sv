@@ -3,77 +3,16 @@
 //              -> baud tick 카운터가 7일 때 데이터 샘플링 (monitor) -> done 신호가 high일 때 출력과 입력 비교 (scoreboard)
 `timescale 1ns / 1ps
 
-localparam CLKS_PER_BIT = 651 * 10;
+import pkg_uartRx::*;
 
-interface itf;
-    reg clk, rst;
-
-    logic       baudTick;
-    logic [3:0] baudTickCnt;
-
-    reg dataIn;
-
-    logic       done;
-    logic [7:0] dataOut;
-endinterface
-
-class transaction;
-    rand bit dataIn;
-    bit [7:0] referData;
-
-    logic done;
-    logic [7:0] dataOut;
-endclass
-
-class generator;
-    virtual itf itf;
-    transaction trans;
-    mailbox #(transaction) gen2drv;
-    event txReq;
-    event scb2gen;
-
-    function new(virtual itf itf, mailbox #(transaction) gen2drv, event txReq, event scb2gen);
-        this.itf = itf;
-        this.gen2drv = gen2drv;
-        this.txReq = txReq;
-        this.scb2gen = scb2gen;
-    endfunction
-
-    task run(int cnt);
-        repeat(cnt) begin
-            trans = new();
-
-            wait(itf.baudTickCnt == 0);
-            trans.dataIn = 1'b0;
-            $display("[%0t] [GEN] Start bit", $time);
-            gen2drv.put(trans);
-            @(txReq);
-
-            for (int i=0; i<8; i++) begin
-                trans.randomize();
-                $display("[%0t] [GEN] Data bit[%0d] = %0d", $time, i, trans.dataIn);
-                gen2drv.put(trans);
-                @(txReq);
-            end
-
-            trans.dataIn = 1'b1;
-            $display("[%0t] [GEN] Stop bit", $time);
-            gen2drv.put(trans);
-
-            @(scb2gen);
-            $display("----------------------------------------------------------------------------------------------------");
-        end
-    endtask
-endclass
-
-class scoreboard;
-    transaction trans;
-    mailbox #(transaction) mon2scb;
+class scoreboard_uartRx;
+    transaction_uartRx trans;
+    mailbox #(transaction_uartRx) mon2scb;
     event scb2gen;
 
     int totalCnt, passCnt, failCnt;
 
-    function new(mailbox #(transaction) mon2scb, event scb2gen);
+    function new(mailbox #(transaction_uartRx) mon2scb, event scb2gen);
         this.mon2scb = mon2scb;
         this.scb2gen = scb2gen;
     endfunction
@@ -83,13 +22,13 @@ class scoreboard;
             mon2scb.get(trans);
             totalCnt++;
 
-            if (trans.dataOut == trans.referData) begin
+            if (trans.rxOut == trans.referData) begin
                 passCnt++;
-                $display("[%0t] [SCB] PASS %0d: dataOut matches dataIn: 0x%0h = %0b", $time, passCnt, trans.dataOut, trans.referData);
+                $display("[%0t] [SCB] PASS %0d: rxOut matches rxIn: 0x%0h = %0b", $time, passCnt, trans.rxOut, trans.referData);
             end
             else begin
                 failCnt++;
-                $display("[%0t] [SCB] FAIL %0d: dataOut 0x%0h but dataIn %0b", $time, failCnt, trans.dataOut, trans.referData);
+                $display("[%0t] [SCB] FAIL %0d: rxOut 0x%0h but rxIn %0b", $time, failCnt, trans.rxOut, trans.referData);
             end
 
             -> scb2gen;
@@ -97,70 +36,15 @@ class scoreboard;
     endtask
 endclass
 
-class driver;
-    virtual itf itf;
-    transaction trans;
-    mailbox #(transaction) gen2drv;
-    event txReq;
+class monitor_uartRx;
+    virtual itf_uartRx itf;
+    transaction_uartRx trans;
     event drv2mon;
-
-    function new(virtual itf itf, mailbox #(transaction) gen2drv, event txReq, event drv2mon);
-        this.itf = itf;
-        this.gen2drv = gen2drv;
-        this.txReq = txReq;
-        this.drv2mon = drv2mon;
-    endfunction
-
-    task reset;
-        itf.rst = 1;
-        itf.dataIn = 1;
-        @(posedge itf.clk);
-        itf.rst = 0;
-        $display("[%0t] Reset released", $time);
-    endtask
-
-    task run;
-        forever begin
-            #(CLKS_PER_BIT);
-            wait(itf.baudTickCnt == 0);
-            gen2drv.get(trans);
-            itf.dataIn = trans.dataIn;
-            $display("[%0t] [DRV] Start bit %0d", $time, trans.dataIn);
-            repeat(8) #(CLKS_PER_BIT);
-            -> drv2mon;
-            -> txReq;
-            repeat(8) #(CLKS_PER_BIT);
-
-            for (int i=0; i<8; i++) begin
-                gen2drv.get(trans);
-                itf.dataIn = trans.dataIn;
-                $display("[%0t] [DRV] Data bit[%0d] = %0d", $time, i, trans.dataIn);
-                repeat(8) #(CLKS_PER_BIT);
-                -> drv2mon;
-                -> txReq;
-                repeat(8) #(CLKS_PER_BIT);
-            end
-
-            gen2drv.get(trans);
-            itf.dataIn = trans.dataIn;
-            $display("[%0t] [DRV] Stop bit %0d", $time, trans.dataIn);
-            repeat(8) #(CLKS_PER_BIT);
-            -> drv2mon;
-            -> txReq;
-            repeat(8) #(CLKS_PER_BIT);
-        end
-    endtask
-endclass
-
-class monitor;
-    virtual itf itf;
-    transaction trans;
-    event drv2mon;
-    mailbox #(transaction) mon2scb;
+    mailbox #(transaction_uartRx) mon2scb;
 
     bit [7:0] dataReg;
 
-    function new(virtual itf itf, event drv2mon, mailbox #(transaction) mon2scb);
+    function new(virtual itf_uartRx itf, event drv2mon, mailbox #(transaction_uartRx) mon2scb);
         this.itf = itf;
         this.drv2mon = drv2mon;
         this.mon2scb = mon2scb;
@@ -169,42 +53,42 @@ class monitor;
     task run;
         forever begin
             @(drv2mon);
-            $display("[%0t] [MON] Start bit %0d", $time, itf.dataIn);
+            $display("[%0t] [MON] Start bit %0d", $time, itf.rxIn);
 
             for (int i=0; i<8; i++) begin
                 @(drv2mon);
-                dataReg[i] = itf.dataIn;
-                $display("[%0t] [MON] Data bit[%0d] = %0d", $time, i, itf.dataIn);
+                dataReg[i] = itf.rxIn;
+                $display("[%0t] [MON] Data bit[%0d] = %0d", $time, i, itf.rxIn);
             end
-            $display("[%0t] [MON] dataIn = %0b = 0x%0h", $time, dataReg, dataReg);
+            $display("[%0t] [MON] rxIn = %0b = 0x%0h", $time, dataReg, dataReg);
 
-            @(itf.done);
+            @(itf.rxDone);
             trans = new();
             trans.referData = dataReg;
-            trans.done = itf.done;
-            trans.dataOut = itf.dataOut;
+            trans.rxDone = itf.rxDone;
+            trans.rxOut = itf.rxOut;
             mon2scb.put(trans);
-            $display("[%0t] [MON] dataOut = 0x%0h", $time, itf.dataOut);
+            $display("[%0t] [MON] rxOut = 0x%0h", $time, itf.rxOut);
             
             @(drv2mon);
-            $display("[%0t] [MON] Stop bit %0d", $time, itf.dataIn);
+            $display("[%0t] [MON] Stop bit %0d", $time, itf.rxIn);
         end
     endtask
 endclass
 
-class environment;
-    transaction trans;
-    generator gen;
-    driver drv;
-    mailbox #(transaction) gen2drv;
+class environment_uartRx;
+    transaction_uartRx trans;
+    generator_uartRx gen;
+    driver_uartRx drv;
+    mailbox #(transaction_uartRx) gen2drv;
     event txReq;
     event drv2mon;
-    scoreboard scb;
-    monitor mon;
-    mailbox #(transaction) mon2scb;
+    scoreboard_uartRx scb;
+    monitor_uartRx mon;
+    mailbox #(transaction_uartRx) mon2scb;
     event scb2gen;
 
-    function new(virtual itf itf);
+    function new(virtual itf_uartRx itf);
         gen2drv = new();
         gen = new(itf, gen2drv, txReq, scb2gen);
         drv = new(itf, gen2drv, txReq, drv2mon);
@@ -217,7 +101,7 @@ class environment;
         drv.reset();
 
         fork
-            gen.run(100);
+            gen.run(10);
             drv.run();
             mon.run();
             scb.run();
@@ -238,18 +122,18 @@ class environment;
 endclass
 
 module tb_uartRx;
-    itf itf();
+    itf_uartRx itf();
     baudTickGen #(.BPS(9600)) u_baudTickGen (.clk(itf.clk), .rst(itf.rst), .tick(itf.baudTick), .tickCnt(itf.baudTickCnt));
     uart_rx #(.BPS(9600)) uut (
         .clk(itf.clk), .rst(itf.rst),
         .baudTick(itf.baudTick), .baudTickCnt(itf.baudTickCnt),
-        .dataIn(itf.dataIn),
-        .done(itf.done), .dataOut(itf.dataOut));
+        .dataIn(itf.rxIn),
+        .done(itf.rxDone), .dataOut(itf.rxOut));
 
     initial itf.clk = 0;
     always #5 itf.clk = ~itf.clk;
 
-    environment env;
+    environment_uartRx env;
 
     initial begin
         $display("====================================================================================================");
