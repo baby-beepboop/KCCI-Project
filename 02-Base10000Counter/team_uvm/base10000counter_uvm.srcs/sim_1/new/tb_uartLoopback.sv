@@ -36,7 +36,7 @@ class scoreboard_loopback;
 
             if (trans.rxReg == trans.txReg) begin
                 passCnt++;
-                $display("[%0t] [SCB] PASS %0d: txOut matches rxIn: 0x%0h", $time, passCnt, trans.txReg, trans.rxReg);
+                $display("[%0t] [SCB] PASS %0d: txOut matches rxIn: 0x%0h", $time, passCnt, trans.txReg);
             end
             else begin
                 failCnt++;
@@ -83,8 +83,10 @@ class monitor_loopback;
             $display("[%0t] [MON] rxIn = %0b = 0x%0h", $time, trans.rxReg, trans.rxReg);
 
             trans.wdata = itf.wdata;
-            @(posedge itf_uartRx.clk) trans.rx2txData = itf.rx2txData;
-            @(posedge itf_uartRx.clk) trans.rdata = itf.rdata;
+            @(posedge itf_uartRx.clk);
+            #1 trans.rx2txData = itf.rx2txData;
+            @(posedge itf_uartRx.clk);
+            #1 trans.rdata = itf.rdata;
             $display("[%0t] [MON] wdata = 0x%0h, rx2txData = 0x%0h, rdata = 0x%0h", $time, trans.wdata, trans.rx2txData, trans.rdata);
 
             @(drv2mon);
@@ -136,7 +138,7 @@ class environment_loopback;
 
     task run;
         drv_uartRx.reset();
-        
+
         fork
             gen_uartRx.run(10);
             drv_uartRx.run();
