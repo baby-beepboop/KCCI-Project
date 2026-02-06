@@ -18,6 +18,7 @@ Desktop.ini
 *.str
 *.xml
 *.pb
+*.xdc
 *.xdc.bak
 *.dcp
 *.ltx
@@ -49,7 +50,37 @@ glbl.v
 *.swo
 *.tmp
 
+#STM32CubeIDE / Eclipse
+.metadata/
+.settings/
+.project
+.cproject
+.mxproject
+
+# Build output
+Debug/
+Release/
+build/
+
+#Generated binary files
+*.o
+*.d
+*.map
+*.hex
+*.lst
+*.su
+
+# IDE temporary files
+*.launch
+
+# OS specific
+.DS_Store
+
+# Backup / temp files
+*~
+
 # Docs
 *.hwp
 *.pdf
 *.pptx
+*.drawio
