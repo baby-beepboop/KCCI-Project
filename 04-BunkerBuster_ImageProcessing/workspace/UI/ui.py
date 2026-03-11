@@ -5,12 +5,13 @@ import os
 import sys
 
 # 공유 데이터 및 쓰레드 안전을 위한 Lock
-grid_data = [{"hint": None, "is_target": False, "explosion_frame": -1, "explosion_timer": 0, "is_destroyed": False,
-              "hit_count": 0, "is_bunker": False} for _ in range(15)]
+grid_data = [
+    {"hint": None, "is_target": False, "explosion_frame": -1, "explosion_timer": 0, "is_destroyed": False,
+     "hit_count": 0, "is_bunker": False} for _ in range(15)]
 data_lock = threading.Lock()
 
-# UART 설정 (실제 연결 시 포트 번호 수정 필요)
-SERIAL_PORT = 'COM3'
+# UART 설정
+SERIAL_PORT = 'COM4'
 BAUD_RATE = 9600
 ser = None
 
@@ -25,8 +26,8 @@ GAME_WIDTH = SCREEN_WIDTH - (MARGIN * 2)
 GAME_HEIGHT = SCREEN_HEIGHT - (MARGIN * 2)
 OFFSET_X, OFFSET_Y = MARGIN, MARGIN
 
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
-pygame.display.set_caption("Bunker Buster")
+screen = pygame.display.set_mode(
+    (SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
 
 # 5x3 격자 설정
 ROWS = 3
@@ -35,7 +36,7 @@ CELL_WIDTH = GAME_WIDTH // COLS
 CELL_HEIGHT = GAME_HEIGHT // ROWS
 
 # 색상 정의
-GRAY_BEZEL            = (30, 30, 30)
+BLACK_BEZEL           = (30, 30, 30)
 GRAY_GROUND_PARTITION = (128, 128, 128)
 BROWN_GROUND_0        = (219, 151, 85)
 BROWN_GROUND_1        = (166, 108, 65)
@@ -47,12 +48,11 @@ try:
     print(f"{SERIAL_PORT} 연결됨")
 except Exception as e:
     print(f"시리얼 포트 연결 실패: {e}")
-    print("시뮬레이션 모드 실행 (Key 1, 2, 3, t)")
+    print("시뮬레이션 모드 실행")
 
 # UART 데이터 수신
 def data_receiver():
     global ser
-
     while True:
         if ser and ser.is_open:
             try:
@@ -95,7 +95,7 @@ def decode_data(data_byte):
 # 카메라 베젤
 def draw_bezel():
     bezel_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-    bezel_surf.fill(GRAY_BEZEL)
+    bezel_surf.fill(BLACK_BEZEL)
 
     inner_rect = pygame.Rect(OFFSET_X, OFFSET_Y, GAME_WIDTH, GAME_HEIGHT)
     pygame.draw.rect(bezel_surf, (0, 0, 0, 0), inner_rect, border_radius=50)
@@ -181,8 +181,10 @@ def draw_grid():
     for row in range(ROWS):
         for col in range(COLS):
             x, y = col * CELL_WIDTH, row * CELL_HEIGHT
-            draw_dashed_line(screen, GRAY_GROUND_PARTITION, (x + CELL_WIDTH, y), (x + CELL_WIDTH, y + CELL_HEIGHT), 2, 8)     # 수직선
-            draw_dashed_line(screen, GRAY_GROUND_PARTITION, (x, y + CELL_HEIGHT), (x + CELL_WIDTH, y + CELL_HEIGHT), 2, 8)    # 수평선
+            draw_dashed_line(
+                screen, GRAY_GROUND_PARTITION, (x + CELL_WIDTH, y), (x + CELL_WIDTH, y + CELL_HEIGHT), 2, 8)     # 수직선
+            draw_dashed_line(
+                screen, GRAY_GROUND_PARTITION, (x, y + CELL_HEIGHT), (x + CELL_WIDTH, y + CELL_HEIGHT), 2, 8)    # 수평선
 
 # 그리드 데이터 업데이트
 def update_grid_data(result):
@@ -369,7 +371,9 @@ def main():
                         if pygame.time.get_ticks() % 3 == 0:
                             grid_data[i]["explosion_frame"] += 1
                             if grid_data[i]["explosion_frame"] >= 7:
-                                grid_data[i].update({"is_target": False, "explosion_frame": -1, "hint": None, "is_bunker": False, "is_destroyed": True})
+                                grid_data[i].update(
+                                    {"is_target": False, "explosion_frame": -1, "hint": None,
+                                     "is_bunker": False, "is_destroyed": True})
                                 grid_data[i]["hit_count"] += 1
 
         # 카메라 베젤 그리기
