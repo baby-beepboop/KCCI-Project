@@ -1,11 +1,11 @@
-# 프로토콜 (S: 모양, C: 색상, P: 좌표)
+# 프로토콜 (C: 색상, P: 좌표)
 #     모드 전환: 0xDD (1101_1101)
 #     사용자 타격 완료: 0x7E (0111_1110)
-#     벙커: 1100_PPPP (0xC_)
+#     게임 종료: 0001_0000 (0x10)
+#     벙커: 0100_PPPP (0x4_)
 #     타켓: 1111_PPPP (0xF_)
-#     힌트: SSCC_PPPP
-#         모양: 01(세모), 10(원)
-#         색: 00(빨강), 01(초록), 10(파랑)
+#     힌트: CCCC_PPPP
+#         색: 0101(초록), 1000(파랑)
 import threading
 import serial
 import pygame
@@ -18,9 +18,14 @@ pygame.mixer.init()
 pygame.font.init()
 
 # UART 설정
-SERIAL_PORT = 'COM4'
 BAUD_RATE = 9600
-ser = None
+PORT_FPGA = 'COM4'
+PORT_STM32 = 'COM12'
+ser_fpga = None
+ser_stm32 = None
+
+HINT_GREEN = 0x05
+HINT_BLUE  = 0x08
 
 # 모드 설정
 CMD_MODE_TOGGLE = 0xDD
@@ -55,13 +60,13 @@ try:
         print(f"폰트 파일을 찾을 수 없음: Micro5-Regular.ttf")
         FONT_SYS_LARGE = pygame.font.SysFont("arial", 150, bold=True)
         FONT_SYS_MEDIUM = pygame.font.SysFont("arial", 80, bold=True)
-        FONT_SYS_SMALL = pygame.font.Font("arial", 40)
+        FONT_SYS_SMALL = pygame.font.SysFont("arial", 40)
 except Exception as e:
     print(f"폰트 로딩 오류: {e}")
-    FONT_MODE_LABEL = pygame.font.SysFont("airal", 60, bold=True)
+    FONT_MODE_LABEL = pygame.font.SysFont("arial", 60, bold=True)
     FONT_SYS_LARGE = pygame.font.SysFont("arial", 150, bold=True)
     FONT_SYS_MEDIUM = pygame.font.SysFont("arial", 80, bold=True)
-    FONT_SYS_SMALL = pygame.font.Font("arial", 40)
+    FONT_SYS_SMALL = pygame.font.SysFont("arial", 40)
 
 # 5x3 격자 설정
 ROWS = 3
@@ -104,7 +109,7 @@ com_grid_data = [{
 # 게임 모드 사용자 화면용 데이터
 game_state = {
     "bunker_pos": None,
-    "hints": {},                 # {pos: {"shape_idx": s, "color_idx": c, "rotation": r}}
+    "hints": {},                 # {pos: {"color_idx": c}}
     "pending_hint_pos": None,
     "revealed_bunker": False,
     "is_win": False,
@@ -123,77 +128,53 @@ user_grid_data = [{
 
 data_lock = threading.Lock()
 
+# 포트 초기화
 try:
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
-    print(f"{SERIAL_PORT} 연결됨")
+    ser_fpga = serial.Serial(PORT_FPGA, BAUD_RATE, timeout=0.1)
+    print(f"FPGA ({PORT_FPGA}) 연결됨")
 except Exception as e:
-    print(f"시리얼 포트 연결 실패: {e}")
-    print("시뮬레이션 모드 실행")
+    print(f"FPGA 연결 실패: {e}")
 
-# UART 데이터 수신
-def data_receiver():
-    global ser
+try:
+    ser_stm32 = serial.Serial(PORT_STM32, BAUD_RATE, timeout=0.1)
+    print(f"STM32 ({PORT_STM32}) 연결됨")
+except Exception as e:
+    print(f"STM32 연결 실패: {e}")
+
+# FPGA 수신
+def fpga_receiver():
+    global ser_fpga
     while True:
-        if ser and ser.is_open:
+        if ser_fpga and ser_fpga.is_open:
             try:
-                if ser.in_waiting > 0:
-                    raw_data = ser.read(1)[0]
-                    result = decode_data(raw_data)
-
+                if ser_fpga.in_waiting > 0:
+                    raw_data = ser_fpga.read(1)[0]
                     if raw_data == CMD_MODE_TOGGLE:
                         toggle_mode()
-                        continue
+                    else:
+                        result = decode_data(raw_data)
+                        if result: update_grid_data(result)
+            except: break
+
+# STM32 수신
+def stm32_receiver():
+    global ser_stm32
+    while True:
+        if ser_stm32 and ser_stm32.is_open:
+            try:
+                if ser_stm32.in_waiting > 0:
+                    raw_data = ser_stm32.read(1)[0]
                     if raw_data in CONTROL_CMDS:
                         user_cmd(raw_data)
-                        continue
-                    if result:
-                        update_grid_data(result)
+            except: break
 
-            except Exception as e:
-                print(f"데이터 수신 실패: {e}")
-                break
-
-# 모드 전환
-def toggle_mode():
-    global current_mode, auto_mode_end, fade_alpha, total_strikes, user_strikes
-    with data_lock:
-        current_mode = MODE_GAME if current_mode == MODE_AUTO else MODE_AUTO
-        auto_mode_end = False
-        fade_alpha = 0
-        total_strikes = 0
-        user_strikes = 0
-        if current_mode == MODE_GAME:
-            game_setup()
-
-# 화면 레이아웃
-def get_layout_params(mode):
-    layouts = {}
-    padding = 20
-
-    # 자동 모드
-    if mode == MODE_AUTO:
-        auto_w = int(SCREEN_WIDTH * 0.8)
-        auto_h = int(auto_w * (3/5))
-        auto_x = (SCREEN_WIDTH - auto_w) // 2
-        auto_y = 50
-        layouts['main'] = {'x': auto_x, 'y': auto_y, 'w': auto_w, 'h': auto_h, 'p': padding}
-    # 게임 모드
-    else:
-        # 사용자 화면
-        user_w = int(SCREEN_WIDTH * 0.62)
-        user_h = int(user_w * (3/5))
-        user_x = 80
-        user_y = (SCREEN_HEIGHT - user_h) // 2 - 40
-        layouts['user'] = {'x': user_x, 'y': user_y, 'w': user_w, 'h': user_h, 'p': padding}
-
-        # 컴퓨터 화면
-        com_w = int(SCREEN_WIDTH * 0.22)
-        com_h = int(com_w * (3/5))
-        com_x = SCREEN_WIDTH - com_w - 100
-        com_y = (user_y + user_h) - com_h
-        layouts['com'] = {'x': com_x, 'y': com_y, 'w': com_w, 'h': com_h, 'p': 8}
-
-    return layouts
+# UART 데이터 송신
+def send_data(device_ser, data_byte):
+    if device_ser and device_ser.is_open:
+        try:
+            device_ser.write(bytes([data_byte]))
+        except Exception as e:
+            print(f"송신 실패: {e}")
 
 # UART 데이터 디코딩
 def decode_data(data_byte):
@@ -206,21 +187,46 @@ def decode_data(data_byte):
     if upper_4 == 0x0F:
         return {"type": "TARGET", "position": lower_4}
     
-    # 벙커 (1100_PPPP)
-    elif upper_4 == 0x0C:
+    # 벙커 (0100_PPPP)
+    elif upper_4 == 0x04:
         return {"type": "BUNKER", "position": lower_4}
     
-    # 힌트 (SSCC_PPPP)
+    # 힌트 (CCCC_PPPP)
     else:
-        shape_code = (upper_4 >> 2) & 0x03
-        color_code = upper_4 & 0x03
+        color_code = upper_4
         return {
             "type": "HINT",
             "position": lower_4,
-            "shape_idx": shape_code,             # 1: 세모, 2: 원
-            "color_idx": color_code,             # 1: 초록, 2: 파랑, 0: 빨강
-            "rotation": random.randint(0, 359)
+            "color_idx": color_code,              # 5: 초록, 8: 파랑
         }
+
+# 컴퓨터 데이터 업데이트
+def update_grid_data(result):
+    global total_strikes
+    pos = result["position"]
+    with data_lock:
+        if result["type"] == "TARGET":
+            if auto_mode_end: return
+            com_grid_data[pos]["is_target"] = True
+            com_grid_data[pos]["explosion_timer"] = 30
+            com_grid_data[pos]["explosion_frame"] = -1
+            total_strikes += 1
+        elif result["type"] == "BUNKER":
+            com_grid_data[pos]["is_bunker"] = True
+        else:
+            com_grid_data[pos]["hint"] = result
+
+# 모드 전환
+def toggle_mode():
+    global current_mode, auto_mode_end, fade_alpha, total_strikes, user_strikes
+    with data_lock:
+        current_mode = MODE_GAME if current_mode == MODE_AUTO else MODE_AUTO
+        auto_mode_end = False
+        fade_alpha = 0
+        total_strikes = 0
+        user_strikes = 0
+        if current_mode == MODE_GAME:
+            game_setup()
 
 # 사용자 입력
 def user_cmd(data_byte):
@@ -251,7 +257,37 @@ def user_cmd(data_byte):
             user_grid_data[pos]["explosion_frame"] = -1
             if current_mode == MODE_GAME:
                 user_strikes += 1
-                game_state["pending_hint_pos"] = pos
+                user_grid_data[pos]["pending_logic"] = True
+
+# 화면 레이아웃
+def get_layout_params(mode):
+    layouts = {}
+    padding = 20
+
+    # 자동 모드
+    if mode == MODE_AUTO:
+        auto_w = int(SCREEN_WIDTH * 0.8)
+        auto_h = int(auto_w * (3/5))
+        auto_x = (SCREEN_WIDTH - auto_w) // 2
+        auto_y = 50
+        layouts['main'] = {'x': auto_x, 'y': auto_y, 'w': auto_w, 'h': auto_h, 'p': padding}
+    # 게임 모드
+    else:
+        # 사용자 화면
+        user_w = int(SCREEN_WIDTH * 0.62)
+        user_h = int(user_w * (3/5))
+        user_x = 80
+        user_y = (SCREEN_HEIGHT - user_h) // 2 - 40
+        layouts['user'] = {'x': user_x, 'y': user_y, 'w': user_w, 'h': user_h, 'p': padding}
+
+        # 컴퓨터 화면
+        com_w = int(SCREEN_WIDTH * 0.22)
+        com_h = int(com_w * (3/5))
+        com_x = SCREEN_WIDTH - com_w - 100
+        com_y = (user_y + user_h) - com_h
+        layouts['com'] = {'x': com_x, 'y': com_y, 'w': com_w, 'h': com_h, 'p': 8}
+
+    return layouts
 
 # 격자 및 데이터 랜더링
 def render_view(rect_params, data_source, is_interactive=False, label=None):
@@ -356,20 +392,17 @@ def render_view(rect_params, data_source, is_interactive=False, label=None):
 
         # 벙커 및 힌트
         icon_key = None
-        hint_rotation = 0
         if current_mode == MODE_GAME and is_interactive:    # 게임 모드
             # 벙커
             if i == game_state["bunker_pos"] and data_source[i]["hit_count"] >= 2 and not game_state["is_win"]:
                 if "BUNKER" in assets:
                     img = pygame.transform.scale(assets["BUNKER"], (int(cw*0.7), int(ch*0.7)))
                     screen.blit(img, img.get_rect(center=(cx, cy)))
-                icon_key = None
             # 힌트
             elif i in game_state["hints"]:
                 if not (i == game_state["bunker_pos"] and data_source[i]["hit_count"] >= 2):
                     h = game_state["hints"][i]
-                    icon_key = f"{'TRIANGLE' if h['shape_idx'] == 1 else 'CIRCLE'}_{h['color_idx']}"
-                    hint_rotation = h.get("rotation", 0)
+                    icon_key = "VENT" if h['color_idx'] == 0x05 else "TREE"
         else:                                               # 자동 모드
             # 벙커
             if node["is_bunker"]:
@@ -379,18 +412,10 @@ def render_view(rect_params, data_source, is_interactive=False, label=None):
             # 힌트
             if node["hint"]:
                 h = node["hint"]
-                icon_key = f"{'TRIANGLE' if h['shape_idx'] == 1 else 'CIRCLE'}_{h['color_idx']}"
-                hint_rotation = h.get("rotation", 0)
+                icon_key = "VENT" if h['color_idx'] == 0x05 else "TREE"
                 
         if icon_key and icon_key in assets:
-            if icon_key == "CIRCLE_0":
-                orig_w, orig_h = 783, 279
-                target_w = int(cw * 0.8)
-                target_h = int(target_w * (orig_h / orig_w))
-                img = pygame.transform.scale(assets[icon_key], (target_w, target_h))
-                img = pygame.transform.rotate(img, hint_rotation)
-            else:
-                img = pygame.transform.scale(assets[icon_key], (int(cw*0.6), int(ch*0.6)))
+            img = pygame.transform.scale(assets[icon_key], (int(cw*0.6), int(ch*0.6)))
             screen.blit(img, img.get_rect(center=(cx, cy)))
 
     # 조준점
@@ -455,18 +480,10 @@ def render_hint_guide(x, align_y, w):
 
     guide_rect = pygame.Rect(x - 15, align_y + 90, w + 60, 480)
     pygame.draw.rect(screen, GRAY_BEZEL, guide_rect, border_radius=15)
-    middle_y = guide_rect.centery
-    draw_dashed_line(screen, (100, 100, 100), (18, middle_y - (align_y + 90)), (guide_rect.width - 18, middle_y - (align_y + 90)), (guide_rect.x, align_y + 90), 2, 10)
-
-    upper_hints = [
-        ("CIRCLE_1", "Within 1 block"),          # 환풍구
-        ("CIRCLE_2", "Within 3 blocks"),         # 배럴
-        ("CIRCLE_0", "Within 4 blocks"),         # 타이어 자국
-    ]
-    lower_hints = [
-        ("TRIANGLE_1", "Over 2 blocks away"),    # 상자
-        ("TRIANGLE_2", "Over 4 blocks away"),    # 돌
-        ("TRIANGLE_0", "Over 5 blocks away")     # 나무
+    
+    hints = [
+        ("VENT", "Within 2 block"),
+        ("TREE", "Over 3 blocks away"),
     ]
 
     icon_size = 55
@@ -474,7 +491,7 @@ def render_hint_guide(x, align_y, w):
     line_height = 70
     
     start_y_upper = guide_rect.top + 30
-    for i, (key, desc) in enumerate(upper_hints):
+    for i, (key, desc) in enumerate(hints):
         item_y = start_y_upper + (i * line_height)
         if key in assets:
             img = pygame.transform.scale(assets[key], (icon_size, icon_size))
@@ -482,42 +499,13 @@ def render_hint_guide(x, align_y, w):
         desc_surf = FONT_SYS_SMALL.render(desc, True, WHITE_TEXT)
         screen.blit(desc_surf, (x + margin_x + icon_size + 30, item_y + 5))
 
-    start_y_lower = middle_y + 30
-    for i, (key, desc) in enumerate(lower_hints):
-        item_y = start_y_lower + (i * line_height)
-        if key in assets:
-            img = pygame.transform.scale(assets[key], (icon_size, icon_size))
-            screen.blit(img, img.get_rect(midleft=(x + margin_x, item_y + 25)))
-        desc_surf = FONT_SYS_SMALL.render(desc, True, WHITE_TEXT)
-        screen.blit(desc_surf, (x + margin_x + icon_size + 30, item_y + 5))
-
-# 컴퓨터 데이터 업데이트
-def update_grid_data(result):
-    global total_strikes
-    pos = result["position"]
-    with data_lock:
-        if result["type"] == "TARGET":
-            if auto_mode_end: return
-            com_grid_data[pos]["is_target"] = True
-            com_grid_data[pos]["explosion_timer"] = 30
-            com_grid_data[pos]["explosion_frame"] = -1
-            total_strikes += 1
-        elif result["type"] == "BUNKER":
-            com_grid_data[pos]["is_bunker"] = True
-        else:
-            com_grid_data[pos]["hint"] = result
-
 # 이미지 및 사운드 로딩
 def load_assets():
     base_path = os.path.dirname(__file__) if "__file__" in locals() else "."
     assets_dir = os.path.join(base_path, "assets")
     asset_files = {
-        "CIRCLE_1": "vent.png",           # 초록 원: 환풍구
-        "TRIANGLE_1": "crate.png",         # 초록 삼각형: 상자
-        "CIRCLE_2": "barrels.png",        # 파란 원: 배럴
-        "TRIANGLE_2": "rock.png",         # 파란 삼각형: 돌
-        "CIRCLE_0": "tire_tracks.png",    # 빨간 원: 타이어 자국
-        "TRIANGLE_0": "tree.png"         # 빨간 삼각형: 나무
+        "VENT": "vent.png",    # 초록: 환풍구
+        "TREE": "tree.png"     # 파랑: 나무
     }
     scaled_assets = {}
 
@@ -580,59 +568,115 @@ def load_assets():
 
 assets = load_assets()
 
-# 게임 모드 시작 시 벙커 및 초기 힌트 생성
+# 게임 모드 초기화 및 벙커 랜덤 생성
 def game_setup():
     game_state["bunker_pos"] = random.randint(0, 14)
     game_state["hints"].clear()
     game_state["is_win"] = False
     game_state["is_lose"] = False
+    generate_initial_hints()
 
-    positions = list(range(15))
-    random.shuffle(positions)
-    for pos in positions[:3]:
-        game_state["hints"][pos] = make_hint(pos)
+# 초기 힌트 생성
+def generate_initial_hints():
+    global game_state
+    game_state["hints"].clear()
+    bp = game_state["bunker_pos"]
+    if bp is None: return
 
-# 힌트 생성
-def make_hint(pos):
-    dist = get_distance(pos, game_state["bunker_pos"])
-    s_idx, c_idx = choose_hint_type(dist)
-    return {"shape_idx": s_idx, "color_idx": c_idx, "rotation": random.randint(0, 359)}
+    all_pos = list(range(ROWS * COLS))
+    near = [p for p in all_pos if get_distance(p, bp) <= 2]
+    far = [p for p in all_pos if get_distance(p, bp) > 2]
+
+    random.shuffle(near)
+    random.shuffle(far)
+    selected = []
+
+    for _ in range(2):
+        if near: selected.append((near.pop(), HINT_GREEN))
+    for _ in range(1):
+        if far: selected.append((far.pop(), HINT_BLUE))
+
+    remaining = [p for p in all_pos if p not in [s[0] for s in selected]]
+    random.shuffle(remaining)
+    while len(selected) < 3 and remaining:
+        p = remaining.pop()
+        c = HINT_GREEN if get_distance(p, bp) <= 2 else HINT_BLUE
+        selected.append((p, c))
+
+    for pos, color in selected:
+        game_state["hints"][pos] = {"color_idx": color}
+        send_data(ser_stm32, (color << 4) | pos)
+
+# 타격 후 힌트 생성
+def generate_hints_after_hits(target_pos):
+    global game_state
+    bp = game_state["bunker_pos"]
+    if bp is None or game_state["revealed_bunker"]: return
+
+    candidates = get_cross_positions(target_pos)
+    near = [p for p in candidates if get_distance(p, bp) <= 2]
+    far = [p for p in candidates if get_distance(p, bp) > 2]
+    random.shuffle(near)
+    random.shuffle(far)
+
+    count = choose_hint_count_after_hits(len(candidates))
+    selected = []
+    r = random.random()
+
+    if count == 1:
+        g, b = (1, 0) if r < 0.80 else (0, 1)
+    elif count == 2:
+        g, b = (2, 0) if r < 0.70 else (1, 1)
+    else:
+        g, b = (3, 0) if r < 0.40 else (2, 1)
+
+    for _ in range(g):
+        if near: selected.append((near.pop(), HINT_GREEN))
+    for _ in range(b):
+        if far: selected.append((far.pop(), HINT_BLUE))
+
+    remaining = [p for p in candidates if p not in [s[0] for s in selected]]
+    random.shuffle(remaining)
+    while len(selected) < count and remaining:
+        p = remaining.pop()
+        c = HINT_GREEN if get_distance(p, bp) <= 2 else HINT_BLUE
+        selected.append((p, c))
+
+    for pos, color in selected:
+        if pos == bp and user_grid_data[pos]["hit_count"] >= 2: continue
+        game_state["hints"][pos] = {"color_idx": color}
+        send_data(ser_stm32, (color << 4) | pos)
 
 # 두 좌표 간 맨해튼 거리 계산
 def get_distance(pos1, pos2):
-    r1, c1 = pos1 // COLS, pos1 % COLS
-    r2, c2 = pos2 // COLS, pos2 % COLS
+    r1, c1 = pos1 % COLS, pos1 // COLS
+    r2, c2 = pos2 % COLS, pos2 // COLS
     return abs(r1 - r2) + abs(c1 - c2)
-
-# 거리에 따라 힌트 종류 결정
-def choose_hint_type(dist):
-    candidates = []
-    if dist <= 1: candidates.append((2, 1, 25))    # 초록 원
-    else:         candidates.append((1, 1, 20))    # 초록 삼각형
-    if dist <= 3: candidates.append((2, 2, 50))    # 파란 원
-    else:         candidates.append((1, 2, 45))    # 파란 삼각형
-    if dist <= 4: candidates.append((2, 0, 40))    # 빨간 원
-    else:         candidates.append((2, 0, 35))    # 빨간 삼각형
-
-    weights = [c[2] for c in candidates]
-    picked = random.choices(candidates, weights=weights, k=1)[0]
-    return picked[0], picked[1]    # shape_idx, color_idx
 
 # 인접 영역 계산
 def get_cross_positions(center_pos):
-    r, c = center_pos // COLS, center_pos % COLS
+    r, c = center_pos % COLS, center_pos // COLS
     offsets = [(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)]
     positions = []
     for dr, dc in offsets:
         nr, nc = r + dr, c + dc
-        if 0 <= nr < ROWS and 0 <= nc < COLS:
-            positions.append(nr * COLS + nc)
+        if 0 <= nr < COLS and 0 <= nc < ROWS:
+            positions.append(nc * COLS + nr)
     return positions
+
+# 힌트 개수 결정
+def choose_hint_count_after_hits(max_count):
+    r = random.random()
+    if max_count <= 1: return 1
+    if max_count == 2: return 1 if r < 0.60 else 2
+    if r < 0.50: return 1
+    elif r < 0.85: return 2
+    else: return 3
 
 def main():
     global auto_mode_end, fade_alpha, total_strikes, user_strikes
-    thread = threading.Thread(target=data_receiver, daemon=True)
-    thread.start()
+    threading.Thread(target=fpga_receiver, daemon=True).start()
+    threading.Thread(target=stm32_receiver, daemon=True).start()
     clock = pygame.time.Clock()
 
     fade_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -663,16 +707,10 @@ def main():
             # 시뮬레이션용 키보드 입력
             if event.type == pygame.KEYDOWN:
                 dummy_byte = 0
-                if   event.key == pygame.K_1: dummy_byte = 0x91    # 원, 초록, 1번 칸 (10_01_0001)
-                elif event.key == pygame.K_2: dummy_byte = 0x62    # 세모, 파랑, 2번 칸 (01_10_0010)
-                elif event.key == pygame.K_3: dummy_byte = 0x83    # 원, 빨강, 3번 칸 (10_00_0011)
-                elif event.key == pygame.K_4: dummy_byte = 0xF3    # 타겟, 3번 칸 (1111_0011)
-                elif event.key == pygame.K_5: dummy_byte = 0x53    # 세모, 초록, 3번 칸 (01_01_0011)
-                elif event.key == pygame.K_6: dummy_byte = 0xF4    # 타겟, 4번 칸 (1111_0100)
-                elif event.key == pygame.K_7: dummy_byte = 0xF8    # 타겟, 8번 칸 (1111_1000)
-                elif event.key == pygame.K_8: dummy_byte = 0xF9    # 타겟, 9번 칸 (1111_1001)
-                elif event.key == pygame.K_9: dummy_byte = 0xCB    # 벙커, 11번 칸 (1100_1011)
-                elif event.key == pygame.K_0: dummy_byte = 0xFB    # 타겟, 11번 칸 (1111_1011)
+                if   event.key == pygame.K_1: dummy_byte = 0x51    # 초록, 1번 칸 (0101_0001)
+                elif event.key == pygame.K_2: dummy_byte = 0x82    # 파랑, 2번 칸 (1000_0010)
+                elif event.key == pygame.K_3: dummy_byte = 0xF3    # 타켓, 3번 칸 (1111_0011)
+                elif event.key == pygame.K_4: dummy_byte = 0x43    # 벙커, 3번 칸 (0100_0011)
 
                 elif event.key == pygame.K_UP:    dummy_byte = CMD_UP
                 elif event.key == pygame.K_DOWN:  dummy_byte = CMD_DOWN
@@ -709,27 +747,22 @@ def main():
                                     if current_mode == MODE_GAME and source is com_grid_data:
                                         if is_bunker_destruction:
                                             game_state["is_lose"] = True
+                                            send_data(ser_stm32, 0x10)
                                     if source is user_grid_data and current_mode == MODE_GAME:
-                                        if ser and ser.is_open:
-                                            try: ser.write(bytes([0x7E]))
-                                            except Exception as e: print(f"타격 완료 신호 송신 오류: {e}")
-                                        pending_pos = game_state["pending_hint_pos"]
-                                        if pending_pos is not None:
-                                            is_bunker_pos = (pending_pos == game_state["bunker_pos"])
-                                            if is_bunker_pos:
-                                                if user_grid_data[pending_pos]["hit_count"] == 2:
+                                        send_data(ser_fpga, 0x7E)
+                                        if source[i].get("pending_logic"):
+                                            if i == game_state["bunker_pos"]:
+                                                if source[i]["hit_count"] == 1:
+                                                    generate_hints_after_hits(i)
+                                                elif source[i]["hit_count"] == 2:
                                                     game_state["revealed_bunker"] = True
-                                                elif user_grid_data[pending_pos]["hit_count"] >= 3:
+                                                    send_data(ser_stm32, 0x40 | i)
+                                                elif source[i]["hit_count"] >= 3:
                                                     game_state["is_win"] = True
+                                                    send_data(ser_stm32, 0x10)
                                             else:
-                                                candidates = get_cross_positions(pending_pos)
-                                                random.shuffle(candidates)
-                                                hint_count = random.randint(1, min(3, len(candidates)))
-                                                for h_idx in range(hint_count):
-                                                    h_pos = candidates[h_idx]
-                                                    if h_pos == game_state["bunker_pos"] and user_grid_data[h_pos]["hit_count"] >= 2: continue
-                                                    game_state["hints"][h_pos] = make_hint(h_pos)
-                                            game_state["pending_hint_pos"] = None
+                                                generate_hints_after_hits(i)
+                                            source[i]["pending_pos"] = False
 
         # 랜더링
         screen.fill((10, 10, 15))
