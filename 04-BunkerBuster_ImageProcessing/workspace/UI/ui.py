@@ -33,6 +33,19 @@ MODE_AUTO = 0
 MODE_GAME = 1
 current_mode = MODE_AUTO
 
+# 게임 모드 세부 상태
+STATE_INTRO = 0
+STATE_NAME_INPUT = 1
+STATE_RETRY_CHECK = 2
+STATE_PLAYING = 3
+game_sub_state = STATE_INTRO
+
+# 사용자 닉네임 및 랭킹
+current_user_name = ""
+user_records = {}         # {"닉네임": 최저_타격_횟수}
+retry_selection = True
+
+game_intro_active = False
 auto_mode_end = False
 fade_alpha = 0
 total_strikes = 0
@@ -103,7 +116,8 @@ com_grid_data = [{
     "explosion_timer": 0,
     "is_destroyed": False,
     "hit_count": 0,
-    "is_bunker": False
+    "is_bunker": False,
+    "bunker_received_count": 0
     } for _ in range(15)]
 
 # 게임 모드 사용자 화면용 데이터
@@ -113,7 +127,8 @@ game_state = {
     "pending_hint_pos": None,
     "revealed_bunker": False,
     "is_win": False,
-    "is_lose": False
+    "is_lose": False,
+    "record_updated": False
 }
 
 user_grid_data = [{
@@ -139,6 +154,7 @@ try:
     ser_stm32 = serial.Serial(PORT_STM32, BAUD_RATE, timeout=0.1)
     print(f"STM32 ({PORT_STM32}) 연결됨")
 except Exception as e:
+    ser_stm32 = None
     print(f"STM32 연결 실패: {e}")
 
 # FPGA 수신
@@ -167,6 +183,8 @@ def stm32_receiver():
                     if raw_data in CONTROL_CMDS:
                         user_cmd(raw_data)
             except: break
+        else:
+            pygame.time.wait(100)
 
 # UART 데이터 송신
 def send_data(device_ser, data_byte):
@@ -212,43 +230,58 @@ def update_grid_data(result):
             com_grid_data[pos]["explosion_frame"] = -1
             total_strikes += 1
         elif result["type"] == "BUNKER":
-            com_grid_data[pos]["is_bunker"] = True
+            com_grid_data[pos]["bunker_received_count"] += 1
+            if com_grid_data[pos]["bunker_received_count"] >= 2:
+                com_grid_data[pos]["is_bunker"] = True
         else:
             com_grid_data[pos]["hint"] = result
 
 # 모드 전환
 def toggle_mode():
-    global current_mode, auto_mode_end, fade_alpha, total_strikes, user_strikes
+    global current_mode, game_sub_state, game_intro_active, current_user_name, auto_mode_end, fade_alpha, total_strikes, user_strikes
     with data_lock:
-        current_mode = MODE_GAME if current_mode == MODE_AUTO else MODE_AUTO
+        if current_mode == MODE_AUTO:
+            current_mode = MODE_GAME
+            game_sub_state = STATE_INTRO
+            game_intro_active = True
+            current_user_name = ""
+        else:
+            current_mode = MODE_AUTO
+            game_intro_active = False
         auto_mode_end = False
         fade_alpha = 0
         total_strikes = 0
         user_strikes = 0
-        if current_mode == MODE_GAME:
-            game_setup()
 
 # 사용자 입력
 def user_cmd(data_byte):
-    global aim_row, aim_col, user_strikes
+    global game_intro_active, game_sub_state, retry_selection, aim_row, aim_col, user_strikes
 
     with data_lock:
+        if game_intro_active:
+            if game_sub_state == STATE_INTRO:
+                if data_byte == CMD_CENTER:
+                    game_sub_state = STATE_NAME_INPUT
+            elif game_sub_state == STATE_RETRY_CHECK:
+                if   data_byte == CMD_LEFT:  retry_selection = True
+                elif data_byte == CMD_RIGHT: retry_selection = False
+                elif data_byte == CMD_CENTER:
+                    if retry_selection: start_game()
+                    else: game_sub_state = STATE_NAME_INPUT
+            return
+        
         if data_byte == CMD_UP:
             if aim_row > 0:
                 aim_row -= 1
-
         elif data_byte == CMD_DOWN:
             if aim_row < ROWS - 1:
                 aim_row += 1
-
         elif data_byte == CMD_LEFT:
             if aim_col > 0:
                 aim_col -= 1
-
         elif data_byte == CMD_RIGHT:
             if aim_col < COLS - 1:
                 aim_col += 1
-
         elif data_byte == CMD_CENTER:
             pos = aim_row * COLS + aim_col
             if game_state["is_win"] or game_state["is_lose"] or auto_mode_end: return
@@ -306,7 +339,7 @@ def render_view(rect_params, data_source, is_interactive=False, label=None):
         label_rect = label_surf.get_rect(midbottom=(frame_rect.centerx, frame_rect.bottom - 15))
         screen.blit(label_surf, label_rect)
 
-        if label == "USER" and current_mode == MODE_GAME:
+        if is_interactive and current_mode == MODE_GAME:
             strike_text = f"STRIKES: {user_strikes}"
             strike_surf = FONT_SYS_MEDIUM.render(strike_text, True, GOLD_TEXT)
             strike_rect = strike_surf.get_rect(midtop=(frame_rect.centerx, frame_rect.top - 110))
@@ -473,24 +506,23 @@ def draw_bezel(rect_params):
     text_rect = text_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 650))
     screen.blit(text_surf, text_rect)
 
-# 힌트 가이드 랜더링
+# 힌트 가이드
 def render_hint_guide(x, align_y, w):
     title_surf = FONT_SYS_MEDIUM.render("HINT GUIDE", True, GOLD_TEXT)
     screen.blit(title_surf, (x, align_y))
 
-    guide_rect = pygame.Rect(x - 15, align_y + 90, w + 60, 480)
+    guide_rect = pygame.Rect(x - 15, align_y + 90, w + 60, 180)
     pygame.draw.rect(screen, GRAY_BEZEL, guide_rect, border_radius=15)
     
     hints = [
         ("VENT", "Within 2 block"),
         ("TREE", "Over 3 blocks away"),
     ]
-
     icon_size = 55
     margin_x = 25
     line_height = 70
-    
     start_y_upper = guide_rect.top + 30
+    
     for i, (key, desc) in enumerate(hints):
         item_y = start_y_upper + (i * line_height)
         if key in assets:
@@ -498,6 +530,52 @@ def render_hint_guide(x, align_y, w):
             screen.blit(img, img.get_rect(midleft=(x + margin_x, item_y + 25)))
         desc_surf = FONT_SYS_SMALL.render(desc, True, WHITE_TEXT)
         screen.blit(desc_surf, (x + margin_x + icon_size + 30, item_y + 5))
+
+# 랭커 출력
+def render_ranker(x, align_y, w):
+    title_surf = FONT_SYS_MEDIUM.render("RANKERS", True, GOLD_TEXT)
+    screen.blit(title_surf, (x, align_y))
+
+    rank_rect = pygame.Rect(x - 15, align_y + 90, w + 60, 180)
+    pygame.draw.rect(screen, GRAY_BEZEL, rank_rect, border_radius=15)
+
+    if not user_records:
+        empty_surf = FONT_SYS_SMALL.render("No records yet", True, (100, 100, 100))
+        screen.blit(empty_surf, empty_surf.get_rect(center=rank_rect.center))
+        return
+    
+    sorted_items = sorted(user_records.items(), key=lambda item: item[1])
+
+    icon_size = 40
+    line_height = 40
+    current_draw_y = rank_rect.top + 30
+    max_draw_count = 3
+    draw_count = 0
+
+    unique_scores = sorted(list(set(user_records.values())))
+    
+    for username, score in sorted_items:
+        if draw_count >= max_draw_count: break
+
+        try:
+            rank_idx = unique_scores.index(score) + 1
+        except ValueError:
+            rank_idx = 99
+
+        trophy_key = f"TROPHY_{rank_idx}"
+        if rank_idx <= 3 and trophy_key in assets:
+            img = pygame.transform.scale(assets[trophy_key], (icon_size, icon_size))
+            screen.blit(img, (x + 25, current_draw_y))
+
+        display_name = (username[:10] + "..") if len(username) > 10 else username
+        name_surf = FONT_SYS_SMALL.render(f"{display_name}", True, WHITE_TEXT)
+        score_surf = FONT_SYS_SMALL.render(f"{score} Hits", True, GOLD_TEXT)
+        
+        screen.blit(name_surf, (x + 25 + icon_size + 25, current_draw_y))
+        screen.blit(score_surf, (x + w - 70, current_draw_y))
+
+        current_draw_y += line_height
+        draw_count += 1
 
 # 이미지 및 사운드 로딩
 def load_assets():
@@ -555,18 +633,95 @@ def load_assets():
             print(f"벙커 이미지 로드 실패: {e}")
 
     # 트로피
-    try:
-        trophy_path = os.path.join(assets_dir, "trophy.png")
-        if os.path.exists(trophy_path):
-            scaled_assets["TROPHY"] = pygame.image.load(trophy_path).convert_alpha()
-        else:
-            print("트로피 이미지 파일을 찾을 수 없음: trophy.png")
-    except Exception as e:
-        print(f"트로피 이미지 로드 실패: {e}")
+    for i in range(1, 4):
+        try:
+            trophy_path = os.path.join(assets_dir, f"trophy_{i}.png")
+            if os.path.exists(trophy_path):
+                scaled_assets[f"TROPHY_{i}"] = pygame.image.load(trophy_path).convert_alpha()
+            else:
+                print("트로피 이미지 파일을 찾을 수 없음: trophy_1.png")
+        except Exception as e:
+            print(f"트로피 이미지 로드 실패: {e}")
 
     return scaled_assets
 
 assets = load_assets()
+
+# 게임 모드 인트로 화면
+def render_game_intro():
+    screen.fill((0, 0, 0))
+
+    if "BUNKER" in assets:
+        bunker_img = pygame.transform.scale(assets["BUNKER"], (400, 400))
+        bunker_rect = bunker_img.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 150))
+        screen.blit(bunker_img, bunker_rect)
+
+    title_surf = FONT_SYS_LARGE.render("BUNKER BUSTER", True, WHITE_TEXT)
+    title_rect = title_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 180))
+    screen.blit(title_surf, title_rect)
+
+    if (pygame.time.get_ticks() // 600) % 2 == 0:
+        sub_surf = FONT_SYS_SMALL.render("PRESS ENTER TO START", True, WHITE_TEXT)
+        sub_rect = sub_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 400))
+        screen.blit(sub_surf, sub_rect)
+
+# 닉네임 입력 화면
+def render_name_input():
+    screen.fill((0, 0, 0))
+
+    if "BUNKER" in assets:
+        bunker_img = pygame.transform.scale(assets["BUNKER"], (400, 400))
+        bunker_rect = bunker_img.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 150))
+        screen.blit(bunker_img, bunker_rect)
+
+    title_surf = FONT_SYS_MEDIUM.render("Enter Your Name", True, GOLD_TEXT)
+    title_rect = title_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 180))
+    screen.blit(title_surf, title_rect)
+
+    name_surf = FONT_SYS_SMALL.render(current_user_name + ("_" if (pygame.time.get_ticks() // 400) % 2 == 0 else ""), True, WHITE_TEXT)
+    name_rect = name_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 320))
+    screen.blit(name_surf, name_rect)
+
+# 재도전 확인 화면
+def render_retry_check():
+    screen.fill((0, 0, 0))
+
+    if "BUNKER" in assets:
+        bunker_img = pygame.transform.scale(assets["BUNKER"], (400, 400))
+        bunker_rect = bunker_img.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 150))
+        screen.blit(bunker_img, bunker_rect)
+
+    msg_surf = FONT_SYS_MEDIUM.render(f"Welcome back, {current_user_name}!", True, GOLD_TEXT)
+    msg_rect = msg_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 100))
+    screen.blit(msg_surf, msg_rect)
+
+    check_surf = FONT_SYS_MEDIUM.render("Wanna retry?", True, WHITE_TEXT)
+    check_rect = check_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 250))
+    screen.blit(check_surf, check_rect)
+
+    # YES/NO 선택
+    yes_color = GOLD_TEXT if retry_selection else GRAY_GROUND_PARTITION
+    no_color = GOLD_TEXT if not retry_selection else GRAY_GROUND_PARTITION
+    yes_surf = FONT_SYS_MEDIUM.render("YES", True, yes_color)
+    no_surf = FONT_SYS_MEDIUM.render("NO", True, no_color)
+    yes_rect = yes_surf.get_rect(center=(SCREEN_WIDTH // 2 - 200, SCREEN_HEIGHT // 2 + 450))
+    no_rect = no_surf.get_rect(center=(SCREEN_WIDTH // 2 + 200, SCREEN_HEIGHT // 2 + 450))
+    screen.blit(yes_surf, yes_rect)
+    screen.blit(no_surf, no_rect)
+
+    # 선택 표시 화살표
+    sel_x = yes_rect.centerx if retry_selection else no_rect.centerx
+    pygame.draw.polygon(screen, GOLD_TEXT, [(sel_x - 20, yes_rect.top - 20), (sel_x + 20, yes_rect.top - 20), (sel_x, yes_rect.top - 5)])
+
+# 게임 플레이 시작
+def start_game():
+    global game_sub_state, game_intro_active, current_user_name
+    game_sub_state = STATE_PLAYING
+    game_intro_active = False
+
+    for i in range(15):
+        user_grid_data[i].update({"is_destroyed": False, "hit_count": 0, "is_bunker": False, "hint": None, "is_target": False, "explosion_timer": 0, "explostion_frame": -1})
+    game_setup()
 
 # 게임 모드 초기화 및 벙커 랜덤 생성
 def game_setup():
@@ -674,7 +829,7 @@ def choose_hint_count_after_hits(max_count):
     else: return 3
 
 def main():
-    global auto_mode_end, fade_alpha, total_strikes, user_strikes
+    global game_intro_active, game_sub_state, current_user_name, retry_selection, auto_mode_end, fade_alpha, total_strikes, user_strikes
     threading.Thread(target=fpga_receiver, daemon=True).start()
     threading.Thread(target=stm32_receiver, daemon=True).start()
     clock = pygame.time.Clock()
@@ -691,18 +846,49 @@ def main():
                     pygame.quit(); sys.exit()
                 if event.key == pygame.K_TAB:
                     toggle_mode()
+                    continue
+                if game_intro_active:
+                    if game_sub_state == STATE_INTRO:
+                        if event.key == pygame.K_RETURN:
+                            game_sub_state = STATE_NAME_INPUT
+                    elif game_sub_state == STATE_NAME_INPUT:
+                        if event.key == pygame.K_BACKSPACE:
+                            current_user_name = current_user_name[:-1]
+                        elif event.key == pygame.K_RETURN and current_user_name.strip():
+                            if current_user_name in user_records:
+                                game_sub_state = STATE_RETRY_CHECK
+                                retry_selection = True
+                            else:
+                                start_game()
+                        elif len(current_user_name) < 10:
+                            if event.unicode.isalnum():
+                                current_user_name += event.unicode
+                    elif game_sub_state == STATE_RETRY_CHECK:
+                        if event.key == pygame.K_LEFT: retry_selection = True
+                        elif event.key == pygame.K_RIGHT: retry_selection = False
+                        elif event.key == pygame.K_RETURN:
+                            if retry_selection: start_game()
+                            else: game_sub_state = STATE_NAME_INPUT
+                    continue
+
                 if (auto_mode_end or game_state["is_win"] or game_state["is_lose"]) and fade_alpha >= 200:
                     if event.key == pygame.K_RETURN:
                         with data_lock:
                             for i in range(15):
                                 com_grid_data[i].update({"is_destroyed": False, "hit_count": 0, "is_bunker": False, "hint": None, "is_target": False, "explosion_timer": 0, "explosion_frame": -1})
                                 user_grid_data[i].update({"is_destroyed": False, "hit_count": 0, "is_bunker": False, "hint": None, "is_target": False, "explosion_timer": 0, "explosion_frame": -1})
+                            game_state["record_updated"] = False 
+                            game_state["revealed_bunker"] = False
+                            game_state["is_win"] = False
+                            game_state["is_lose"] = False
                             auto_mode_end = False
                             fade_alpha = 0
                             total_strikes = 0
                             user_strikes = 0
                             if current_mode == MODE_GAME:
-                                game_setup()
+                                game_sub_state = STATE_INTRO
+                                game_intro_active = True
+                                current_user_name = ""
             
             # 시뮬레이션용 키보드 입력
             if event.type == pygame.KEYDOWN:
@@ -723,6 +909,18 @@ def main():
                         user_cmd(dummy_byte)
                     else:
                         update_grid_data(decode_data(dummy_byte))
+
+        if current_mode == MODE_GAME and game_intro_active:
+            if game_sub_state == STATE_INTRO:
+                render_game_intro()
+            elif game_sub_state == STATE_NAME_INPUT:
+                render_name_input()
+            elif game_sub_state == STATE_RETRY_CHECK:
+                render_retry_check()
+                
+            pygame.display.flip()
+            clock.tick(30)
+            continue
 
         # 애니메이션 및 게임 로직 업데이트
         with data_lock:
@@ -759,10 +957,15 @@ def main():
                                                     send_data(ser_stm32, 0x40 | i)
                                                 elif source[i]["hit_count"] >= 3:
                                                     game_state["is_win"] = True
+                                                    if not game_state["record_updated"]:
+                                                        name = current_user_name.strip() if current_user_name.strip() else "GUEST"
+                                                        if name not in user_records or user_strikes < user_records[name]:
+                                                            user_records[name] = user_strikes
+                                                        game_state["record_updated"] = True
                                                     send_data(ser_stm32, 0x10)
                                             else:
                                                 generate_hints_after_hits(i)
-                                            source[i]["pending_pos"] = False
+                                            source[i]["pending_logic"] = False
 
         # 랜더링
         screen.fill((10, 10, 15))
@@ -770,30 +973,29 @@ def main():
         if current_mode == MODE_AUTO:
             render_view(layouts['main'], com_grid_data, is_interactive=True)
         else:
-            u_top = render_view(layouts['user'], user_grid_data, is_interactive=True, label="USER")
+            u_top = render_view(layouts['user'], user_grid_data, is_interactive=True, label=current_user_name.upper())
             render_view(layouts['com'], com_grid_data, is_interactive=False, label="PC")
             render_hint_guide(layouts['com']['x'] - 20, u_top, layouts['com']['w'])
+            render_ranker(layouts['com']['x'] - 20, u_top + 300, layouts['com']['w'])
 
         # 결과 화면
         if auto_mode_end or game_state["is_win"] or game_state["is_lose"]:
-            if fade_alpha < 220:
-                fade_alpha += 5
+            if fade_alpha < 220: fade_alpha += 5
             fade_surface.set_alpha(fade_alpha)
             screen.blit(fade_surface, (0, 0))
             if fade_alpha > 100:
-                if game_state["is_win"] and "TROPHY" in assets:
-                    trophy_img = pygame.transform.scale(assets["TROPHY"], (130, 130))
-                    trophy_rect = trophy_img.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 230))
-                    screen.blit(trophy_img, trophy_rect)
                 if game_state["is_win"]:
-                    title_str = "YOU WIN!"
-                    count_str = f"Total Strikes: {user_strikes}"
-                elif game_state["is_lose"]:
-                    title_str = "YOU LOSE!"
-                    count_str = f"PC Total Strikes: {total_strikes}"
-                else:
-                    title_str = "AUTO BUNKER SEARCH ENDS"
-                    count_str = f"Total Strikes: {total_strikes}"
+                    u_scores = sorted(list(set(user_records.values())))
+                    try:
+                        my_rank = u_scores.index(user_strikes) + 1
+                    except: my_rank == 99
+                    trophy_key = f"TROPHY_{my_rank}"
+                    if my_rank <= 3 and trophy_key in assets:
+                        trophy_img = pygame.transform.scale(assets[f"TROPHY_{my_rank}"], (130, 130))
+                        trophy_rect = trophy_img.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 230))
+                        screen.blit(trophy_img, trophy_rect)
+                title_str = "VICTORY!" if game_state["is_win"] else ("DEFEAT..." if game_state["is_lose"] else "AUTO BUNKER SEARCH ENDS")
+                count_str = f"Total Strikes: {user_strikes if current_mode == MODE_GAME else total_strikes}"
                 end_text = FONT_SYS_LARGE.render(title_str, True, WHITE_TEXT)
                 text_rect = end_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 100))
                 screen.blit(end_text, text_rect)
